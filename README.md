@@ -56,6 +56,58 @@ The CareerCraft agent is designed to:
 
 ## 🧪 Future Enhancements
 
-- Feedback loop for iterative resume improvement
-- ATS compatibility and autofill integration
-- International job market support
+
+## Running the MCP server (dev)
+
+This repository contains a minimal, development MCP server implemented with FastAPI. The server uses an in-memory queue and is suitable for local testing and development.
+
+Prerequisites
+- Python 3.10+
+- A working internet connection to install dependencies
+
+Windows (cmd.exe) quick start
+
+1. Create and activate a virtual environment:
+
+```cmd
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+2. Install dependencies:
+
+```cmd
+pip install -r requirements.txt
+```
+
+3. Start the server (uvicorn):
+
+```cmd
+uvicorn server.app.main:app --reload --port 8000
+```
+
+4. Try the API endpoints (example using curl/powershell or a browser):
+
+- Trigger ingestion (calls `get_data.fetch_jobs`):
+
+```cmd
+curl -X POST http://127.0.0.1:8000/api/ingest
+```
+
+- List jobs:
+
+```cmd
+curl http://127.0.0.1:8000/api/jobs
+```
+
+Notes
+- The in-memory queue is not persistent. For production, use Redis/RabbitMQ and a real DB (Postgres).
+- The ingest endpoint calls `get_data.fetch_jobs()` which may perform HTTP requests; tests use a mocked fetch to avoid network I/O.
+
+Running tests
+
+With the virtualenv active and dependencies installed, run:
+
+```cmd
+pytest -q
+```
