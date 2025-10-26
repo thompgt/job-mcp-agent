@@ -12,3 +12,6 @@ pymupdf>=1.24
 pytesseract>=0.3.10
 pdf2image>=1.17
 Pillow>=10.0
+
+langchain>=0.1.9
+openai>=1.0.0
