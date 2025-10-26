@@ -47,3 +47,17 @@ def complete_job(job_id: int, result: dict):
     if not ok:
         raise HTTPException(status_code=404, detail="Job not found")
     return {"status": "completed"}
+
+
+@router.post("/parse-resume")
+async def parse_resume(file: UploadFile = File(...)):
+    suffix = Path(file.filename).suffix or ".pdf"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp_path = Path(tmp.name)
+        with tmp_path.open("wb") as f:
+            shutil.copyfileobj(file.file, f)
+    try:
+        return parse_resume_file(tmp_path)
+    finally:
+        try: tmp_path.unlink(missing_ok=True)
+        except Exception: pass
