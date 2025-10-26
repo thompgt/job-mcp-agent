@@ -98,6 +98,72 @@ def _format_job_for_prompt(job: Dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def _summarize_experiences_as_sentences(experiences: list[dict[str, Any]]) -> list[str]:
+    """
+    Take structured experience blocks and turn each into a short readable paragraph.
+
+    Example output element:
+    "As a Quantitative Algorithm Developer Intern at RBC Capital Markets (2025 – Aug 2025),
+     I built XYZ, collaborated with ABC, and delivered DEF."
+    """
+    out: list[str] = []
+
+    for role in experiences:
+        org = role.get("organization", "")  # e.g. "Royal Bank of Canada Capital Markets, New York, NY"
+        title = role.get("title", "")        # e.g. "Quantitative Algorithm Developer Intern"
+        period = role.get("period", "")      # e.g. "2025 – Aug 2025"
+        highlights = role.get("highlights", []) or []
+
+        # Clean up org if it's like "Org, Location" and title already has org etc.
+        # (We won't over-engineer that now; just present it naturally.)
+
+        # Join first 2-3 highlights into one flowing sentence-ish block.
+        # We'll trim trailing periods to avoid "...,." issues.
+        cleaned_points = []
+        for h in highlights[:3]:
+            h_clean = h.strip()
+            # remove trailing period because we'll stitch them with commas
+            if h_clean.endswith("."):
+                h_clean = h_clean[:-1]
+            cleaned_points.append(h_clean)
+
+        # Build the "actions/results" chunk like:
+        # "I developed X, worked on Y, and improved Z."
+        action_chunk = ""
+        if len(cleaned_points) == 1:
+            action_chunk = f"I {cleaned_points[0]}."
+        elif len(cleaned_points) == 2:
+            action_chunk = f"I {cleaned_points[0]}, and I {cleaned_points[1]}."
+        elif len(cleaned_points) >= 3:
+            action_chunk = f"I {cleaned_points[0]}, {cleaned_points[1]}, and {cleaned_points[2]}."
+        else:
+            action_chunk = ""
+
+        # Build header like:
+        # "As a Quantitative Algorithm Developer Intern at Royal Bank of Canada Capital Markets (2025 – Aug 2025), ..."
+        header_bits = []
+        if title:
+            header_bits.append(f"As a {title}")
+        if org:
+            header_bits.append(f"at {org}")
+        if period:
+            header_bits.append(f"({period})")
+        header_text = " ".join(header_bits).strip()
+
+        if header_text and action_chunk:
+            paragraph = f"{header_text}, {action_chunk}"
+        elif header_text:
+            paragraph = header_text + "."
+        else:
+            # fallback if we somehow have no structured header
+            paragraph = action_chunk if action_chunk else ""
+
+        if paragraph:
+            out.append(paragraph)
+
+    return out
+
+
 def generate_cover_letter(
     resume: Dict[str, Any],
     job: Dict[str, Any],
@@ -190,20 +256,16 @@ def generate_cover_letter(
             "These technical and analytical abilities align closely with the responsibilities outlined in the posting."
         )
 
-    # experience paragraph with multiple roles
-    if resume.get("experience"):
-        experiences = resume["experience"]
-        paragraphs.append(
-            "Across my recent experiences, I have developed a strong foundation in data- and software-driven problem solving:"
-        )
-        for role in experiences[:3]:  # include up to 3 experiences for brevity
-            org = role.get("organization", "")
-            title = role.get("title", "")
-            period = role.get("period", "")
-            header = ", ".join(x for x in [title, org, period] if x)
-            highlights = role.get("highlights", [])
-            bullet_text = " ".join(highlights[:1]) if highlights else ""
-            paragraphs.append(f"- {header}: {bullet_text}")
+    # experience paragraph(s) in natural language using highlights
+    experiences = resume.get("experience", [])
+    if experiences:
+        exp_summaries = _summarize_experiences_as_sentences(experiences[:3])
+        if exp_summaries:
+            paragraphs.append(
+                "In my recent roles, I have built a strong foundation in quantitative analysis, research, and data-driven problem solving:"
+            )
+            for para in exp_summaries:
+                paragraphs.append(para)
 
     # close
     paragraphs.append(
