@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 # LangChain + Ollama
 try:
@@ -38,7 +38,7 @@ def _format_resume_for_prompt(resume: Dict[str, Any]) -> str:
     if skills:
         lines.append("Skills: " + ", ".join(sorted(skills)))
 
-    # Experience
+    # Experience (list of dicts with organization/title/period/highlights)
     experience = resume.get("experience")
     if experience:
         lines.append("Experience:")
@@ -107,12 +107,11 @@ def generate_cover_letter(
 ) -> str:
     """
     Generate a personalized cover letter using a local Ollama model via LangChain.
-    If Ollama isn't available, fall back to a templated letter.
+    If Ollama isn't available or errors, fall back to a deterministic template.
 
-    resume: dict from parse_resume_file(...)
-    job: dict from your job source / queue
+    resume: dict returned by parse_resume_file(...)
+    job: dict from your job postings / queue
     """
-
     resume_str = _format_resume_for_prompt(resume)
     job_str = _format_job_for_prompt(job)
 
@@ -134,7 +133,7 @@ def generate_cover_letter(
         f"Candidate Résumé:\n{resume_str}"
     )
 
-    # Try Ollama first
+    # Try local Ollama model first
     if ChatOllama is not None:
         try:
             llm = ChatOllama(
@@ -153,15 +152,10 @@ def generate_cover_letter(
                 return response.content.strip()
 
         except Exception:
+            # Fall through to fallback
             pass
 
-    # -------- fallback path (no LLM) --------
-    candidate_name = resume.get("name")
-    greeting = (
-        "Dear Hiring Manager,"
-        if not candidate_name
-        else f"Dear {candidate_name},"
-    )
+    # -------- fallback path (no LLM or LLM error) --------
 
     job_title = (
         job.get("title")
@@ -169,14 +163,17 @@ def generate_cover_letter(
         or job.get("name")
         or "the position"
     )
+
     company_name = (
         job.get("companyName")
         or job.get("company")
         or job.get("org")
-        or "your company"
+        or "the company"
     )
 
-    paragraphs = []
+    greeting = f"Dear {company_name} Recruitment Team,"
+
+    paragraphs: list[str] = []
 
     # intro
     paragraphs.append(
@@ -189,25 +186,29 @@ def generate_cover_letter(
     if resume.get("skills"):
         skills_list = ", ".join(sorted(resume["skills"]))
         paragraphs.append(
-            f"In my previous academic and professional work I have developed strengths in {skills_list}, "
-            "which align closely with the responsibilities you outlined."
+            f"Throughout my academic and professional journey I have developed strengths in {skills_list}. "
+            "These technical and analytical abilities align closely with the responsibilities outlined in the posting."
         )
 
-    # experience paragraph
+    # experience paragraph with multiple roles
     if resume.get("experience"):
-        first_role = resume["experience"][0]
-        org = first_role.get("organization", "a recent role")
-        title = first_role.get("title", "")
-        period = first_role.get("period", "")
-        header = ", ".join(x for x in [title, org, period] if x)
+        experiences = resume["experience"]
         paragraphs.append(
-            f"In {header}, I gained hands-on experience solving real problems, communicating results, "
-            "and delivering measurable value."
+            "Across my recent experiences, I have developed a strong foundation in data- and software-driven problem solving:"
         )
+        for role in experiences[:3]:  # include up to 3 experiences for brevity
+            org = role.get("organization", "")
+            title = role.get("title", "")
+            period = role.get("period", "")
+            header = ", ".join(x for x in [title, org, period] if x)
+            highlights = role.get("highlights", [])
+            bullet_text = " ".join(highlights[:1]) if highlights else ""
+            paragraphs.append(f"- {header}: {bullet_text}")
 
+    # close
     paragraphs.append(
-        "I would welcome the opportunity to discuss how my background can support your goals. "
-        "Thank you for your time and consideration."
+        "I would welcome the opportunity to discuss how my skills and experience can support your goals. "
+        "Thank you for your time and consideration, and I look forward to the possibility of contributing to your team."
     )
 
     return "\n\n".join(paragraphs)
