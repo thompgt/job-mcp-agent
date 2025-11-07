@@ -1,7 +1,7 @@
 from typing import List
 from ..services.queue import get_global_queue
 
-from ...get_data import fetch_jobs
+from get_data import fetch_jobs
 
 
 class MCPController:
