@@ -8,6 +8,12 @@ try:
     import redis
 except Exception:
     redis = None
+try:
+    import pymongo
+    from pymongo import ReturnDocument
+except Exception:
+    pymongo = None
+    ReturnDocument = None
 
 
 class InMemoryQueue:
@@ -143,6 +149,72 @@ class RedisQueue:
             return False
         self._r.hset(key, mapping={"status": "completed", "result": json.dumps(result)})
         return True
+
+
+class MongoQueue:
+    """MongoDB-backed queue implementation.
+
+    Collections used:
+    - counters: document {_id: 'jobid', seq: int}
+    - jobs: documents {id: int, payload: dict, status: str, result: dict}
+    - jobs_queue: documents {job_id: int, enqueued_at: datetime}
+    """
+
+    def __init__(self, mongo_url: str = "mongodb://localhost:27017", dbname: str = "job_mcp"):
+        if pymongo is None:
+            raise RuntimeError("pymongo package is not available")
+        self._client = pymongo.MongoClient(mongo_url)
+        self._db = self._client[dbname]
+        self._jobs = self._db.jobs
+        self._queue = self._db.jobs_queue
+
+        # create indexes for performance
+        try:
+            self._jobs.create_index("id", unique=True)
+            self._queue.create_index("job_id")
+        except Exception:
+            pass
+
+    def _next_id(self) -> int:
+        c = self._db.counters.find_one_and_update(
+            {"_id": "jobid"}, {"$inc": {"seq": 1}}, upsert=True, return_document=ReturnDocument.AFTER
+        )
+        return int(c["seq"])
+
+    def add_jobs(self, jobs: List[dict]) -> int:
+        docs = []
+        count = 0
+        for job in jobs:
+            jid = self._next_id()
+            doc = {"id": jid, "payload": job, "status": "queued"}
+            docs.append(doc)
+            self._queue.insert_one({"job_id": jid})
+            count += 1
+        if docs:
+            self._jobs.insert_many(docs)
+        return count
+
+    def list_jobs(self):
+        out = []
+        for doc in self._jobs.find({}):
+            payload = doc.get("payload", {}) or {}
+            out.append({
+                "id": int(doc.get("id")),
+                "title": payload.get("jobTitle") or payload.get("title"),
+                "company": payload.get("companyName"),
+                "location": payload.get("location"),
+            })
+        return out
+
+    def claim(self, job_id: int) -> bool:
+        res = self._jobs.find_one_and_update(
+            {"id": job_id, "status": "queued"}, {"$set": {"status": "claimed"}}, return_document=ReturnDocument.AFTER
+        )
+        return res is not None
+
+    def complete(self, job_id: int, result: dict) -> bool:
+        res = self._jobs.find_one_and_update({"id": job_id}, {"$set": {"status": "completed", "result": result}})
+        return res is not None
 
 
 _global_queue = None

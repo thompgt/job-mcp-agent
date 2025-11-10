@@ -6,6 +6,7 @@ FastMCP server quickly without reimplementing business logic.
 from fastmcp import FastMCP
 from server.app.controllers.mcp_controller import MCPController
 from get_data import fetch_jobs
+from pathlib import Path
 
 
 mcp = FastMCP("CareerCraft MCP")
@@ -20,7 +21,8 @@ def fetch_data(count: int = 100, out_path: str = "jobs.json") -> dict:
     Returns a small summary including number of items fetched and the output path.
     """
     jobs = fetch_jobs(count=count, out_path=out_path)
-    return {"fetched": len(jobs), "out_path": str(out_path)}
+    p = Path(out_path).resolve()
+    return {"fetched": len(jobs), "out_path": str(p)}
 
 
 @mcp.tool
