@@ -224,8 +224,19 @@ def get_global_queue(redis_url: str = "redis://localhost:6379/0"):
     global _global_queue
     if _global_queue is not None:
         return _global_queue
+    # Prefer MongoDB if available and reachable (local dev often has mongodb running via docker)
+    if pymongo is not None:
+        try:
+            q = MongoQueue()
+            # quick smoke test: list_jobs (will raise if connection fails)
+            _ = q.list_jobs()
+            _global_queue = q
+            logger.info("Using MongoDB-backed queue (mongodb://localhost:27017)")
+            return _global_queue
+        except Exception as e:
+            logger.warning("MongoDB not available (%s). Trying Redis next.", e)
 
-    # Try to create Redis-backed queue first
+    # Next try Redis if available
     if redis is not None:
         try:
             q = RedisQueue(redis_url=redis_url)
@@ -235,7 +246,7 @@ def get_global_queue(redis_url: str = "redis://localhost:6379/0"):
         except Exception as e:
             logger.warning("Redis not available (%s). Falling back to in-memory queue.", e)
 
-    # Fallback
+    # Fallback to in-memory queue
     _global_queue = InMemoryQueue()
     logger.info("Using in-memory queue (fallback)")
     return _global_queue
