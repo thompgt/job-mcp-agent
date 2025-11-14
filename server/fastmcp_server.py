@@ -9,6 +9,15 @@ from get_data import fetch_jobs
 from pathlib import Path
 from typing import Optional
 import logging
+import os
+from urllib.parse import quote_plus
+
+# optional: load .env in development if python-dotenv is available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
 import json
 import hashlib
 
@@ -46,6 +55,24 @@ def populate_database(out_path: str = "jobs.json", mongo_url: str = "mongodb://l
     """
     logger.info("Tool populate_database called: out_path=%s mongo_url=%s", out_path, mongo_url)
 
+    # Allow overriding connection via environment variables (.env)
+    env_mongo = os.getenv("MONGO_URL")
+    if env_mongo:
+        # If the env url contains a placeholder like <db_password>, replace it from MONGO_PASS
+        if "<db_password>" in env_mongo:
+            env_mongo = env_mongo.replace("<db_password>", quote_plus(os.getenv("MONGO_PASS", "")))
+        mongo_url = env_mongo
+    else:
+        # support constructing from parts
+        m_user = os.getenv("MONGO_USER")
+        print(f"m_user: {m_user}")
+        m_pass = os.getenv("MONGO_PASS")
+        print(f"m_pass: {m_pass}")
+        if m_user and m_pass:
+            mongo_url = f"mongodb+srv://{m_user}:{m_pass}@cluster0.xdbs2l7.mongodb.net/"
+            print(mongo_url)
+        else:
+            print("Using default mongo_url:", mongo_url)
     # Read file
     p = Path(out_path)
     if not p.exists():
@@ -76,30 +103,64 @@ def populate_database(out_path: str = "jobs.json", mongo_url: str = "mongodb://l
         logger.warning("No jobs found in file: %s", out_path)
         return {"inserted": 0, "existing": 0, "errors": 0, "error": "no_jobs_found", "out_path": str(p)}
 
-    # Import pymongo lazily so tool still exists if package missing
+    # Import pymongo lazily so tool still exists if package missing; allow mongomock fallback
+    pymongo = None
+    mongomock = None
+    use_mongomock = False
     try:
         import pymongo
-    except Exception as e:
-        logger.exception("pymongo is not available: %s", e)
-        return {"inserted": 0, "existing": 0, "errors": 0, "error": "pymongo_not_installed", "out_path": str(p)}
+        from pymongo.errors import DuplicateKeyError
+    except Exception:
+        pymongo = None
 
-    # Connect to Mongo
     try:
-        client = pymongo.MongoClient(mongo_url, serverSelectionTimeoutMS=5000)
-        # quick ping
-        client.admin.command("ping")
-    except Exception as e:
-        logger.exception("Failed to connect to MongoDB at %s: %s", mongo_url, e)
-        return {"inserted": 0, "existing": 0, "errors": 0, "error": "mongo_connect_failed", "out_path": str(p)}
+        import mongomock
+    except Exception:
+        mongomock = None
+
+    client = None
+    if pymongo is not None:
+        try:
+            client = pymongo.MongoClient(mongo_url, serverSelectionTimeoutMS=5000)
+            client.admin.command("ping")
+            logger.info("Connected to MongoDB at %s", mongo_url)
+        except Exception as e:
+            logger.warning("Failed to connect to MongoDB at %s: %s", mongo_url, e)
+            client = None
+
+    if client is None:
+        if mongomock is not None:
+            logger.info("Falling back to mongomock (in-memory MongoDB) for populate_database")
+            client = mongomock.MongoClient()
+            use_mongomock = True
+        else:
+            logger.exception("pymongo not available or MongoDB unreachable and mongomock not installed")
+            return {"inserted": 0, "existing": 0, "errors": 0, "error": "mongo_connect_failed", "out_path": str(p)}
 
     db = client["jobs"]
     col = db["jobs"]
-    # ensure unique index on source_hash
+    # ensure unique index on source_hash (idempotent)
     try:
         col.create_index("source_hash", unique=True)
     except Exception:
-        # ignore index creation errors
-        pass
+        logger.debug("create_index on source_hash failed or already exists; continuing")
+
+    # normalize and insert with DuplicateKey handling to avoid races
+    # DuplicateKeyError is available from pymongo if present; if using mongomock it'll raise a generic exception
+    try:
+        from pymongo.errors import DuplicateKeyError
+    except Exception:
+        class DuplicateKeyError(Exception):
+            pass
+
+    def _normalize(job_obj: dict) -> dict:
+        # shallow copy then drop common ephemeral fields that would make duplicates differ
+        j = dict(job_obj)
+        for fld in ("fetched_at", "scraped_at", "request_id", "crawl_id", "id"):
+            # note: we deliberately don't drop job id if you want it preserved in payload,
+            # but many feeds include changing IDs; remove only when necessary
+            j.pop(fld, None)
+        return j
 
     inserted = 0
     existing = 0
@@ -107,15 +168,18 @@ def populate_database(out_path: str = "jobs.json", mongo_url: str = "mongodb://l
 
     for job in jobs:
         try:
-            # canonical JSON for hashing
-            payload_str = json.dumps(job, sort_keys=True, ensure_ascii=False)
+            norm = _normalize(job)
+            payload_str = json.dumps(norm, sort_keys=True, ensure_ascii=False)
             h = hashlib.sha256(payload_str.encode("utf-8")).hexdigest()
             doc = {"source_hash": h, "payload": job}
-            res = col.update_one({"source_hash": h}, {"$setOnInsert": doc}, upsert=True)
-            # if an insert happened, upserted_id will be set
-            if getattr(res, "upserted_id", None) is not None:
-                inserted += 1
-            else:
+            try:
+                res = col.update_one({"source_hash": h}, {"$setOnInsert": doc}, upsert=True)
+                if getattr(res, "upserted_id", None) is not None:
+                    inserted += 1
+                else:
+                    existing += 1
+            except DuplicateKeyError:
+                # concurrent insert by another process; treat as existing
                 existing += 1
         except Exception as e:
             logger.exception("Failed to insert job into Mongo: %s", e)
