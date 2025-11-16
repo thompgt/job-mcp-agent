@@ -12,70 +12,72 @@ except ImportError:
 
 def _format_resume_for_prompt(resume: Dict[str, Any]) -> str:
     """
-    Turn the parsed resume dict (output of parse_resume_file) into a concise,
-    human-readable summary for the LLM prompt.
+    Convert the parsed résumé into a clean, structured summary that avoids
+    broken bullet formatting and gives the LLM predictable fields.
     """
-    lines: list[str] = []
+    lines = []
 
     # Candidate name
     if resume.get("name"):
-        lines.append(f"Candidate Name: {resume['name']}")
+        lines.append(f"Name: {resume['name']}")
 
-    # Contact info
+    # Contacts
     contacts = resume.get("contacts", {})
-    contact_bits = []
-    if contacts.get("email"):
-        contact_bits.append(f"email: {contacts['email']}")
-    if contacts.get("linkedin"):
-        contact_bits.append(f"linkedin: {contacts['linkedin']}")
-    if contacts.get("github"):
-        contact_bits.append(f"github: {contacts['github']}")
-    if contact_bits:
-        lines.append("Contacts: " + ", ".join(contact_bits))
+    if contacts:
+        contact_str = ", ".join(
+            f"{k}: {v}" for k, v in contacts.items() if v
+        )
+        lines.append(f"Contacts: {contact_str}")
 
     # Skills
     skills = resume.get("skills")
     if skills:
         lines.append("Skills: " + ", ".join(sorted(skills)))
 
-    # Experience (list of dicts with organization/title/period/highlights)
-    experience = resume.get("experience")
-    if experience:
+    # Experience (clean structured blocks)
+    experiences = resume.get("experience", [])
+    if experiences:
         lines.append("Experience:")
-        for role in experience:
-            org = role.get("organization", "")
-            title = role.get("title", "")
-            period = role.get("period", "")
-            header = " | ".join(x for x in [org, title, period] if x)
-            if header:
-                lines.append(f"- {header}")
-            # include first couple bullet points to keep prompt small
-            for h in role.get("highlights", [])[:2]:
-                lines.append(f"    • {h}")
+        for exp in experiences:
+            org = exp.get("organization", "")
+            title = exp.get("title", "")
+            period = exp.get("period", "")
+            highlights = exp.get("highlights", [])
+
+            lines.append("  - Role:")
+            if title:
+                lines.append(f"      Title: {title}")
+            if org:
+                lines.append(f"      Organization: {org}")
+            if period:
+                lines.append(f"      Period: {period}")
+
+            if highlights:
+                lines.append("      Responsibilities:")
+                for h in highlights[:3]:
+                    lines.append(f"        • {h}")
 
     # Education
-    education = resume.get("education")
+    education = resume.get("education", [])
     if education:
-        edu_bits = []
+        lines.append("Education:")
         for ed in education:
             txt = ed.get("text", "")
             if txt:
-                edu_bits.append(txt.strip())
-        if edu_bits:
-            lines.append("Education: " + " | ".join(edu_bits))
+                lines.append(f"  - {txt}")
 
     # Projects
-    projects = resume.get("projects")
+    projects = resume.get("projects", [])
     if projects:
         lines.append("Projects:")
-        for proj in projects[:3]:  # don't explode prompt
-            name = proj.get("name")
-            if name:
-                lines.append(f"- {name}")
-            for h in proj.get("highlights", [])[:2]:
-                lines.append(f"    • {h}")
+        for p in projects[:3]:
+            name = p.get("name", "")
+            lines.append(f"  - {name}")
+            for h in p.get("highlights", [])[:2]:
+                lines.append(f"      • {h}")
 
     return "\n".join(lines)
+
 
 
 def _format_job_for_prompt(job: Dict[str, Any]) -> str:
@@ -182,7 +184,7 @@ def generate_cover_letter(
     job_str = _format_job_for_prompt(job)
 
     system_prompt = (
-        "You are a helpful assistant that writes professional and personalized "
+        "You are an industry expert, with an extremely high IQ of 167, and a helpful assistant that writes professional and personalized "
         "cover letters. Your letters should be concise (3–4 paragraphs), "
         "highlight relevant skills and experiences from the candidate's résumé, "
         "and explain why the candidate is a strong fit for the job. "

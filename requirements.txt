@@ -7,6 +7,11 @@ pydantic>=1.10.12
 httpx>=0.26.0
 requests>=2.31.0
 
+# Contextual Matching Requirements
+sentence-transformers>=2.6.0
+numpy>=1.24.0
+
+
 # Testing
 pytest>=7.4.2
 
@@ -56,4 +61,3 @@ Pillow>=10.0
 langchain>=0.1.9
 langchain-community>=0.1.0
 ollama>=0.1.0
-
