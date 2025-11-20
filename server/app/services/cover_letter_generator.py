@@ -276,3 +276,76 @@ def generate_cover_letter(
     )
 
     return "\n\n".join(paragraphs)
+
+
+if __name__ == "__main__":
+    """Simple CLI to test cover letter generation.
+
+    Usage examples (run from project root):
+      python -m server.app.services.cover_letter_generator --demo
+      python -m server.app.services.cover_letter_generator --resume-json resume.json --job-json job.json
+    """
+    import argparse
+    import json
+    from pathlib import Path
+
+    ap = argparse.ArgumentParser(description="Test cover letter generator")
+    ap.add_argument("--demo", action="store_true", help="use built-in demo resume and job")
+    ap.add_argument("--resume-json", type=str, help="path to parsed resume JSON file")
+    ap.add_argument("--job-json", type=str, help="path to job posting JSON file")
+    args = ap.parse_args()
+
+    resume = None
+    job = None
+
+    if args.demo:
+        resume = {
+            "name": "Alex Example",
+            "contacts": {"email": "alex@example.com", "phone": "+1 555 123 4567"},
+            "skills": ["python", "sql", "aws", "docker"],
+            "experience": [
+                {
+                    "organization": "ExampleCorp, Remote",
+                    "title": "Software Engineer",
+                    "period": "2022 - Present",
+                    "highlights": [
+                        "Implemented ETL pipelines that processed 10M+ records/day",
+                        "Reduced query latency by 40% through indexing and query tuning",
+                    ],
+                }
+            ],
+            "education": [{"text": "B.Sc. Computer Science, University X (2020)"}],
+            "projects": [{"name": "Smart ETL", "highlights": ["Built end-to-end ETL"]}],
+        }
+
+        job = {
+            "title": "Backend Engineer",
+            "companyName": "Acme Analytics",
+            "location": "Remote",
+            "description": "Work on data pipelines, scalable backend services, and CI/CD.",
+        }
+
+    if args.resume_json:
+        p = Path(args.resume_json)
+        if not p.exists():
+            print("resume json not found:", args.resume_json)
+            raise SystemExit(2)
+        with p.open("r", encoding="utf-8") as fh:
+            resume = json.load(fh)
+
+    if args.job_json:
+        p = Path(args.job_json)
+        if not p.exists():
+            print("job json not found:", args.job_json)
+            raise SystemExit(2)
+        with p.open("r", encoding="utf-8") as fh:
+            job = json.load(fh)
+
+    if resume is None or job is None:
+        print("Either --demo or both --resume-json and --job-json are required")
+        raise SystemExit(2)
+
+    out = generate_cover_letter(resume, job)
+    print("\n--- Generated cover letter ---\n")
+    print(out)
+

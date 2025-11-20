@@ -24,3 +24,5 @@ jobs.json
 .json
 .csv
 .pkl
+*.pdf
+*.docx

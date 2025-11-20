@@ -6,6 +6,7 @@ FastMCP server quickly without reimplementing business logic.
 from fastmcp import FastMCP
 from server.app.controllers.mcp_controller import MCPController
 from get_data import fetch_jobs
+from server.app.services.resume_parser import parse_resume_file
 from pathlib import Path
 from typing import Optional
 import logging
@@ -40,6 +41,28 @@ def fetch_data(count: int = 100, out_path: str = "jobs.json") -> dict:
     p = Path(out_path).resolve()
     logger.info("Fetched %d jobs and wrote to %s", len(jobs), p)
     return {"fetched": len(jobs), "out_path": str(p)}
+
+
+@mcp.tool
+def parse_resume(resume_path: str) -> dict:
+    """Parse a resume file (pdf/docx/txt) and return structured metadata.
+
+    resume_path: filesystem path to a resume file. The tool will call
+    `server.app.services.resume_parser.parse_resume_file` and return the parsed
+    dictionary. Returns an error key on failure.
+    """
+    logger.info("Tool parse_resume called: %s", resume_path)
+    p = Path(resume_path)
+    if not p.exists():
+        logger.warning("Resume file does not exist: %s", resume_path)
+        return {"error": "file_not_found", "path": str(p)}
+    try:
+        parsed = parse_resume_file(p)
+        logger.info("Parsed resume %s: name=%s skills=%d", resume_path, parsed.get("name"), len(parsed.get("skills", [])))
+        return {"parsed": parsed, "path": str(p)}
+    except Exception as e:
+        logger.exception("Failed to parse resume %s: %s", resume_path, e)
+        return {"error": "parse_failed", "detail": str(e), "path": str(p)}
 
 @mcp.tool
 def populate_database(out_path: str = "jobs.json", mongo_url: str = "mongodb://localhost:27017") -> dict:
@@ -122,6 +145,7 @@ def populate_database(out_path: str = "jobs.json", mongo_url: str = "mongodb://l
     if pymongo is not None:
         try:
             client = pymongo.MongoClient(mongo_url, serverSelectionTimeoutMS=5000)
+            # quick ping to verify connection
             client.admin.command("ping")
             logger.info("Connected to MongoDB at %s", mongo_url)
         except Exception as e:
@@ -188,6 +212,7 @@ def populate_database(out_path: str = "jobs.json", mongo_url: str = "mongodb://l
     logger.info("populate_database completed: inserted=%s existing=%s errors=%s", inserted, existing, errors)
     return {"inserted": inserted, "existing": existing, "errors": errors, "out_path": str(p)}
 
+
 @mcp.tool
 def ingest(count: int = 100, out_path: Optional[str] = None) -> dict:
     """Ingest jobs into the MCP queue.
@@ -231,6 +256,23 @@ def complete(job_id: int, result: dict) -> dict:
     ok = controller.complete_job(job_id, result)
     logger.info("Complete result for %s: %s", job_id, ok)
     return {"completed": bool(ok)}
+
+
+@mcp.tool
+def generate_cover_letter_tool(resume: dict, job: dict, model_name: str = "llama3.2", temperature: float = 0.7) -> dict:
+    """Generate a cover letter string from a parsed resume dict and a job dict.
+
+    Returns {'cover_letter': str} or {'error': '...'} on failure.
+    """
+    try:
+        # lazy import to avoid heavy deps at module import time
+        from server.app.services.cover_letter_generator import generate_cover_letter
+
+        letter = generate_cover_letter(resume, job, model_name=model_name, temperature=temperature)
+        return {"cover_letter": letter}
+    except Exception as e:
+        logger.exception("generate_cover_letter_tool failed: %s", e)
+        return {"error": "generate_failed", "detail": str(e)}
 
 
 if __name__ == "__main__":
