@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Application Pipeline</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .tabs {
+            display: flex;
+            background: #f8f9fa;
+            border-bottom: 2px solid #dee2e6;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 15px;
+            text-align: center;
+            cursor: pointer;
+            background: transparent;
+            border: none;
+            font-size: 1em;
+            font-weight: 600;
+            color: #495057;
+            transition: all 0.3s;
+        }
+
+        .tab:hover {
+            background: #e9ecef;
+        }
+
+        .tab.active {
+            background: white;
+            color: #667eea;
+            border-bottom: 3px solid #667eea;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #dee2e6;
+            border-radius: 6px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 6px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .results {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            display: none;
+        }
+
+        .results.show {
+            display: block;
+        }
+
+        .result-item {
+            background: white;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #667eea;
+        }
+
+        .result-item h3 {
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .result-item p {
+            color: #666;
+            line-height: 1.6;
+        }
+
+        .job-card {
+            background: white;
+            padding: 20px;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .job-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .job-card h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .job-card .company {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .job-card .location {
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        .job-card .similarity {
+            display: inline-block;
+            padding: 5px 15px;
+            background: #667eea;
+            color: white;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: 600;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #667eea;
+            font-weight: 600;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 20px;
+        }
+
+        .success {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 20px;
+        }
+
+        .cover-letter {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            white-space: pre-wrap;
+            line-height: 1.8;
+            font-size: 1.05em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Job Application Pipeline</h1>
+            <p>AI-powered job search, resume parsing, and cover letter generation</p>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('fetch')">Fetch Jobs</button>
+            <button class="tab" onclick="switchTab('parse')">Parse Resume</button>
+            <button class="tab" onclick="switchTab('recommend')">Recommendations</button>
+            <button class="tab" onclick="switchTab('pipeline')">Complete Pipeline</button>
+        </div>
+
+        <div class="content">
+            <!-- Fetch Jobs Tab -->
+            <div id="fetch" class="tab-content active">
+                <h2>Fetch Job Listings</h2>
+                <div class="form-group">
+                    <label for="job-count">Number of Jobs:</label>
+                    <input type="number" id="job-count" value="50" min="1" max="200">
+                </div>
+                <div class="form-group">
+                    <label for="jobs-file">Output File:</label>
+                    <input type="text" id="jobs-file" value="jobs.json">
+                </div>
+                <button class="btn" onclick="fetchJobs()">Fetch Jobs</button>
+                <div id="fetch-results" class="results"></div>
+            </div>
+
+            <!-- Parse Resume Tab -->
+            <div id="parse" class="tab-content">
+                <h2>Parse Resume</h2>
+                <div class="form-group">
+                    <label for="resume-file">Upload Resume (PDF, DOCX, or TXT):</label>
+                    <input type="file" id="resume-file" accept=".pdf,.docx,.txt">
+                </div>
+                <button class="btn" onclick="parseResume()">Parse Resume</button>
+                <div id="parse-results" class="results"></div>
+            </div>
+
+            <!-- Recommendations Tab -->
+            <div id="recommend" class="tab-content">
+                <h2>Job Recommendations</h2>
+                <p style="margin-bottom: 20px; color: #666;">
+                    Upload a resume and get AI-powered job recommendations based on semantic similarity.
+                </p>
+                <div class="form-group">
+                    <label for="rec-resume-file">Upload Resume:</label>
+                    <input type="file" id="rec-resume-file" accept=".pdf,.docx,.txt">
+                </div>
+                <div class="form-group">
+                    <label for="rec-jobs-file">Jobs File:</label>
+                    <input type="text" id="rec-jobs-file" value="jobs.json">
+                </div>
+                <div class="form-group">
+                    <label for="rec-top-k">Number of Recommendations:</label>
+                    <input type="number" id="rec-top-k" value="10" min="1" max="50">
+                </div>
+                <button class="btn" onclick="getRecommendations()">Get Recommendations</button>
+                <div id="rec-results" class="results"></div>
+            </div>
+
+            <!-- Complete Pipeline Tab -->
+            <div id="pipeline" class="tab-content">
+                <h2>Complete Pipeline</h2>
+                <p style="margin-bottom: 20px; color: #666;">
+                    Run the complete pipeline: fetch jobs, parse resume, get recommendations, and generate a cover letter.
+                </p>
+                <div class="form-group">
+                    <label for="pipe-resume-file">Upload Resume:</label>
+                    <input type="file" id="pipe-resume-file" accept=".pdf,.docx,.txt">
+                </div>
+                <div class="form-group">
+                    <label for="pipe-job-count">Number of Jobs to Fetch:</label>
+                    <input type="number" id="pipe-job-count" value="50" min="1" max="200">
+                </div>
+                <button class="btn" onclick="runPipeline()">Run Complete Pipeline</button>
+                <div id="pipe-results" class="results"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+
+        function switchTab(tabName) {
+            // Update tab buttons
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            // Update tab content
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.getElementById(tabName).classList.add('active');
+        }
+
+        async function fetchJobs() {
+            const count = document.getElementById('job-count').value;
+            const outPath = document.getElementById('jobs-file').value;
+            const resultsDiv = document.getElementById('fetch-results');
+
+            resultsDiv.innerHTML = '<div class="loading">Fetching jobs...</div>';
+            resultsDiv.classList.add('show');
+
+            try {
+                const response = await fetch(`${API_BASE}/api/jobs/fetch`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ count: parseInt(count), out_path: outPath })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    resultsDiv.innerHTML = `
+                        <div class="success">
+                            <h3>✓ Jobs Fetched Successfully</h3>
+                            <p>Fetched ${data.fetched} jobs</p>
+                            <p>Saved to: ${data.out_path}</p>
+                        </div>
+                    `;
+                } else {
+                    resultsDiv.innerHTML = `<div class="error">Error: ${data.detail}</div>`;
+                }
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+            }
+        }
+
+        async function parseResume() {
+            const fileInput = document.getElementById('resume-file');
+            const resultsDiv = document.getElementById('parse-results');
+
+            if (!fileInput.files[0]) {
+                alert('Please select a resume file');
+                return;
+            }
+
+            resultsDiv.innerHTML = '<div class="loading">Parsing resume...</div>';
+            resultsDiv.classList.add('show');
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            try {
+                const response = await fetch(`${API_BASE}/api/resume/parse`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    resultsDiv.innerHTML = `
+                        <div class="success">
+                            <h3>✓ Resume Parsed Successfully</h3>
+                            <p><strong>Name:</strong> ${data.name || 'Not found'}</p>
+                            <p><strong>Skills Found:</strong> ${data.skills.length}</p>
+                            <p><strong>Experience Entries:</strong> ${data.experience_count}</p>
+                            <p><strong>Education Entries:</strong> ${data.education_count}</p>
+                            ${data.skills.length > 0 ? `<p><strong>Skills:</strong> ${data.skills.join(', ')}</p>` : ''}
+                        </div>
+                    `;
+                } else {
+                    resultsDiv.innerHTML = `<div class="error">Error: ${data.detail}</div>`;
+                }
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+            }
+        }
+
+        async function getRecommendations() {
+            const fileInput = document.getElementById('rec-resume-file');
+            const jobsFile = document.getElementById('rec-jobs-file').value;
+            const topK = document.getElementById('rec-top-k').value;
+            const resultsDiv = document.getElementById('rec-results');
+
+            if (!fileInput.files[0]) {
+                alert('Please select a resume file');
+                return;
+            }
+
+            resultsDiv.innerHTML = '<div class="loading">Analyzing resume and generating recommendations...</div>';
+            resultsDiv.classList.add('show');
+
+            try {
+                // First parse the resume
+                const formData = new FormData();
+                formData.append('file', fileInput.files[0]);
+
+                const parseResponse = await fetch(`${API_BASE}/api/resume/parse`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!parseResponse.ok) {
+                    throw new Error('Failed to parse resume');
+                }
+
+                // Get parsed resume data (need to upload and get full parsed data)
+                // For now, we'll use the parse-path endpoint workaround
+                // In production, you'd store the parsed resume temporarily
+
+                resultsDiv.innerHTML = '<div class="error">Please use the Complete Pipeline tab for full recommendations with uploaded files.</div>';
+                
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+            }
+        }
+
+        async function runPipeline() {
+            const fileInput = document.getElementById('pipe-resume-file');
+            const jobCount = document.getElementById('pipe-job-count').value;
+            const resultsDiv = document.getElementById('pipe-results');
+
+            if (!fileInput.files[0]) {
+                alert('Please select a resume file');
+                return;
+            }
+
+            resultsDiv.innerHTML = '<div class="loading">Running complete pipeline... This may take a minute.</div>';
+            resultsDiv.classList.add('show');
+
+            const formData = new FormData();
+            formData.append('resume_file', fileInput.files[0]);
+
+            const params = new URLSearchParams({
+                job_count: jobCount,
+                jobs_file: 'jobs.json',
+                mongo_url: 'mongodb://localhost:27017',
+                generate_first_cover_letter: 'true'
+            });
+
+            try {
+                const response = await fetch(`${API_BASE}/api/pipeline/run?${params}`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.status === 'success') {
+                    let html = '<div class="success"><h3>✓ Pipeline Completed Successfully</h3></div>';
+
+                    // Show fetch results
+                    if (data.stages.fetch) {
+                        html += `<div class="result-item">
+                            <h3>1. Jobs Fetched</h3>
+                            <p>Fetched ${data.stages.fetch.count} jobs from API</p>
+                        </div>`;
+                    }
+
+                    // Show parse results
+                    if (data.stages.parse) {
+                        html += `<div class="result-item">
+                            <h3>2. Resume Parsed</h3>
+                            <p><strong>Candidate:</strong> ${data.stages.parse.name}</p>
+                            <p><strong>Skills:</strong> ${data.stages.parse.skills_count}</p>
+                        </div>`;
+                    }
+
+                    // Show recommendations
+                    if (data.stages.recommend && data.stages.recommend.top_jobs) {
+                        html += `<div class="result-item">
+                            <h3>3. Top Job Recommendations</h3>`;
+                        
+                        data.stages.recommend.top_jobs.forEach(job => {
+                            const title = job.jobTitle || job.title || 'Unknown';
+                            const company = job.companyName || job.company || 'Unknown';
+                            const location = job.jobGeo || job.location || 'Unknown';
+                            const similarity = (job.similarity * 100).toFixed(1);
+
+                            html += `
+                                <div class="job-card">
+                                    <h3>${title}</h3>
+                                    <div class="company">${company}</div>
+                                    <div class="location">📍 ${location}</div>
+                                    <span class="similarity">${similarity}% Match</span>
+                                </div>
+                            `;
+                        });
+
+                        html += '</div>';
+                    }
+
+                    // Show cover letter
+                    if (data.stages.cover_letter && data.stages.cover_letter.status === 'success') {
+                        html += `<div class="result-item">
+                            <h3>4. Cover Letter Generated</h3>
+                            <p><strong>For:</strong> ${data.stages.cover_letter.job_title} at ${data.stages.cover_letter.company}</p>
+                            <p><strong>Match Score:</strong> ${(data.stages.cover_letter.similarity * 100).toFixed(1)}%</p>
+                            <div class="cover-letter">${data.stages.cover_letter.letter}</div>
+                        </div>`;
+                    }
+
+                    resultsDiv.innerHTML = html;
+                } else {
+                    resultsDiv.innerHTML = `<div class="error">Error: ${data.detail || 'Pipeline failed'}</div>`;
+                }
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+            }
+        }
+    </script>
+</body>
+</html>
