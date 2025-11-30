@@ -315,15 +315,32 @@ def create_cover_letter(
     Returns:
         Dictionary with the generated cover letter or error
     """
-    job_title = job.get("title") or job.get("jobTitle") or job.get("name") or "Unknown"
-    company = job.get("company") or job.get("companyName") or "Unknown"
+    # Handle different job field naming conventions
+    # Extract job data if wrapped in a match object with similarity score
+    job_data = job.get("job", job) if "job" in job else job
+    
+    # Normalize field names
+    job_title = (
+        job_data.get("title") or 
+        job_data.get("jobTitle") or 
+        job_data.get("name") or 
+        job_data.get("position") or 
+        "Unknown"
+    )
+    company = (
+        job_data.get("company") or 
+        job_data.get("companyName") or 
+        job_data.get("company_name") or 
+        job_data.get("employer") or 
+        "Unknown"
+    )
     
     logger.info(f"Generating cover letter for {job_title} at {company}")
     
     try:
         letter = generate_cover_letter(
             resume,
-            job,
+            job_data,
             model_name=model_name,
             temperature=temperature
         )
@@ -544,45 +561,143 @@ def match_jobs_from_resume_path(
     """
     logger.info(f"Parsing resume and matching jobs for: {resume_path}")
     
-    # Parse resume
-    parse_result = parse_resume(resume_path=resume_path)
-    
-    if parse_result.get("status") != "success":
+    # Parse resume using the actual function
+    p = Path(resume_path)
+    if not p.exists():
         return {
             "status": "error",
-            "error": "resume_parse_failed",
-            "parse_result": parse_result,
+            "error": "file_not_found",
+            "path": str(p),
             "matches": []
         }
     
-    parsed_resume = parse_result.get("parsed")
+    try:
+        parsed_resume = parse_resume_file(p)
+    except Exception as e:
+        logger.exception(f"Failed to parse resume: {e}")
+        return {
+            "status": "error",
+            "error": "resume_parse_failed",
+            "detail": str(e),
+            "matches": []
+        }
     
-    # Match jobs
-    match_result = match_jobs_to_resume(
-        resume=parsed_resume,
-        jobs_source=jobs_source,
-        jobs_file=jobs_file,
-        mongo_url=mongo_url,
-        top_k=top_k,
-        min_similarity=min_similarity,
-        filter_senior_for_grads=filter_senior_for_grads,
-        model_name=model_name
-    )
+    # Load jobs from specified source
+    jobs = []
     
-    # Combine results
-    return {
-        "status": match_result.get("status"),
-        "resume_info": {
-            "name": parsed_resume.get("name"),
-            "skills_count": len(parsed_resume.get("skills", [])),
-            "experience_count": len(parsed_resume.get("experience", [])),
-            "education_count": len(parsed_resume.get("education", []))
-        },
-        "matches": match_result.get("matches", []),
-        "total_jobs_considered": match_result.get("total_jobs_considered", 0),
-        "matches_count": match_result.get("matches_count", 0),
-        "error": match_result.get("error")
-    }
+    if jobs_source == "mongodb":
+        # Override with environment variables
+        env_mongo = os.getenv("MONGO_URL")
+        if env_mongo:
+            if "<db_password>" in env_mongo:
+                env_mongo = env_mongo.replace("<db_password>", quote_plus(os.getenv("MONGO_PASS", "")))
+            mongo_url = env_mongo
+        else:
+            m_user = os.getenv("MONGO_USER")
+            m_pass = os.getenv("MONGO_PASS")
+            if m_user and m_pass:
+                mongo_url = f"mongodb+srv://{m_user}:{m_pass}@cluster0.xdbs2l7.mongodb.net/"
+        
+        try:
+            import pymongo
+            client = pymongo.MongoClient(mongo_url, serverSelectionTimeoutMS=5000)
+            client.admin.command("ping")
+            logger.info("Connected to MongoDB")
+            
+            db = client["jobs"]
+            col = db["jobs"]
+            docs = list(col.find({}))
+            jobs = [doc.get("payload", doc) for doc in docs]
+            logger.info(f"Loaded {len(jobs)} jobs from MongoDB")
+            
+        except Exception as e:
+            logger.exception(f"Failed to load jobs from MongoDB: {e}")
+            return {
+                "status": "error",
+                "error": "mongo_connection_failed",
+                "detail": str(e),
+                "matches": []
+            }
+    
+    elif jobs_source == "file":
+        p_jobs = Path(jobs_file)
+        if not p_jobs.exists():
+            return {
+                "status": "error",
+                "error": "file_not_found",
+                "path": str(p_jobs),
+                "matches": []
+            }
+        
+        try:
+            data = json.loads(p_jobs.read_text(encoding="utf-8"))
+            
+            # Extract jobs list
+            if isinstance(data, dict):
+                for k in ("jobs", "data", "results", "items"):
+                    if k in data and isinstance(data[k], list):
+                        jobs = data[k]
+                        break
+                if not jobs:
+                    lists = [(k, v) for k, v in data.items() if isinstance(v, list)]
+                    if lists:
+                        jobs = max(lists, key=lambda kv: len(kv[1]))[1]
+            elif isinstance(data, list):
+                jobs = data
+            
+            logger.info(f"Loaded {len(jobs)} jobs from {jobs_file}")
+            
+        except Exception as e:
+            logger.exception(f"Failed to load jobs from file: {e}")
+            return {
+                "status": "error",
+                "error": "file_read_failed",
+                "detail": str(e),
+                "matches": []
+            }
+    
+    if not jobs:
+        return {
+            "status": "error",
+            "error": "no_jobs_available",
+            "matches": []
+        }
+    
+    # Perform matching using the actual function
+    try:
+        matches = rank_jobs_for_resume(
+            parsed_resume,
+            jobs,
+            top_k=top_k,
+            min_similarity=min_similarity,
+            filter_senior_for_grads=filter_senior_for_grads,
+            model_name=model_name
+        )
+        
+        logger.info(f"Found {len(matches)} matching jobs")
+        
+        # Combine results
+        return {
+            "status": "success",
+            "resume_info": {
+                "name": parsed_resume.get("name"),
+                "skills_count": len(parsed_resume.get("skills", [])),
+                "experience_count": len(parsed_resume.get("experience", [])),
+                "education_count": len(parsed_resume.get("education", []))
+            },
+            "matches": matches,
+            "total_jobs_considered": len(jobs),
+            "matches_count": len(matches)
+        }
+        
+    except Exception as e:
+        logger.exception(f"Failed to match jobs: {e}")
+        return {
+            "status": "error",
+            "error": "matching_failed",
+            "detail": str(e),
+            "matches": []
+        }
 
 
 # =============================================================================
@@ -603,14 +718,15 @@ def run_complete_pipeline(
     1. Fetch jobs from API
     2. Populate MongoDB
     3. Parse resume
-    4. (Optional) Generate cover letter for first job
+    4. Match jobs to resume
+    5. (Optional) Generate cover letter for best match
     
     Args:
         resume_path: Path to resume file
         job_count: Number of jobs to fetch (default: 50)
         jobs_file: Output file for fetched jobs (default: "jobs.json")
         mongo_url: MongoDB connection URL
-        generate_cover_letter_for_first: Whether to generate cover letter for first job
+        generate_cover_letter_for_first: Whether to generate cover letter for best match
     
     Returns:
         Dictionary with results from each pipeline stage
@@ -635,10 +751,6 @@ def run_complete_pipeline(
     populate_result = populate_mongodb(out_path=jobs_file, mongo_url=mongo_url)
     results["stages"]["populate"] = populate_result
     
-    if populate_result.get("status") != "success":
-        results["status"] = "failed_at_populate"
-        return results
-    
     # Stage 3: Parse resume
     logger.info("Stage 3: Parsing resume")
     parse_result = parse_resume(resume_path=resume_path)
@@ -650,41 +762,43 @@ def run_complete_pipeline(
     
     parsed_resume = parse_result.get("parsed")
     
-    # Stage 4: Generate cover letter (optional)
-    if generate_cover_letter_for_first and parsed_resume:
-        logger.info("Stage 4: Generating cover letter")
-        
-        # Load first job from the fetched file
-        try:
-            p = Path(jobs_file)
-            data = json.loads(p.read_text(encoding="utf-8"))
+    # Stage 4: Match jobs to resume
+    logger.info("Stage 4: Matching jobs to resume")
+    match_result = match_jobs_to_resume(
+        resume=parsed_resume,
+        jobs_source="file",
+        jobs_file=jobs_file,
+        top_k=10,
+        min_similarity=0.25
+    )
+    results["stages"]["match"] = match_result
+    
+    # Stage 5: Generate cover letter for best match (optional)
+    if generate_cover_letter_for_first and match_result.get("status") == "success":
+        matches = match_result.get("matches", [])
+        if matches:
+            logger.info("Stage 5: Generating cover letter for top match")
             
-            jobs = []
-            if isinstance(data, dict):
-                for k in ("jobs", "data", "results", "items"):
-                    if k in data and isinstance(data[k], list):
-                        jobs = data[k]
-                        break
-            elif isinstance(data, list):
-                jobs = data
-            
-            if jobs:
-                first_job = jobs[0]
+            try:
+                best_match = matches[0]
+                # Extract job data from match object (which has structure {"job": {...}, "similarity": 0.x})
+                job_data = best_match.get("job", best_match) if isinstance(best_match, dict) and "job" in best_match else best_match
+                
                 cover_letter_result = create_cover_letter(
                     resume=parsed_resume,
-                    job=first_job
+                    job=job_data
                 )
                 results["stages"]["cover_letter"] = cover_letter_result
-            else:
+            except Exception as e:
+                logger.exception(f"Failed to generate cover letter: {e}")
                 results["stages"]["cover_letter"] = {
-                    "status": "skipped",
-                    "reason": "no_jobs_available"
+                    "status": "error",
+                    "error": str(e)
                 }
-        except Exception as e:
-            logger.exception(f"Failed to generate cover letter: {e}")
+        else:
             results["stages"]["cover_letter"] = {
-                "status": "error",
-                "error": str(e)
+                "status": "skipped",
+                "reason": "no_matching_jobs"
             }
     
     results["status"] = "success"
