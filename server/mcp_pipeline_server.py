@@ -36,6 +36,7 @@ from fastmcp import FastMCP
 from get_data import fetch_jobs
 from server.app.services.resume_parser import parse_resume_file
 from server.app.services.cover_letter_generator import generate_cover_letter
+from server.app.services.matching_engine import rank_jobs_for_resume
 
 # Configure logging
 logging.basicConfig(
@@ -345,7 +346,247 @@ def create_cover_letter(
 
 
 # =============================================================================
-# Tool 5: Complete Pipeline
+# Tool 5: Match Jobs to Resume
+# =============================================================================
+
+@mcp.tool()
+def match_jobs_to_resume(
+    resume: Dict[str, Any],
+    jobs_source: str = "mongodb",
+    jobs_file: str = "jobs.json",
+    mongo_url: str = "mongodb://localhost:27017",
+    top_k: int = 10,
+    min_similarity: float = 0.25,
+    filter_senior_for_grads: bool = True,
+    model_name: str = "all-MiniLM-L6-v2"
+) -> dict:
+    """Match and rank jobs for a parsed resume using semantic similarity.
+    
+    Uses sentence-transformers to compute similarity between resume and job descriptions,
+    with optional seniority filtering to remove senior roles for junior candidates.
+    
+    Args:
+        resume: Parsed resume dictionary from parse_resume tool
+        jobs_source: Source of jobs - "mongodb" or "file" (default: "mongodb")
+        jobs_file: Path to jobs JSON file if jobs_source="file" (default: "jobs.json")
+        mongo_url: MongoDB connection URL if jobs_source="mongodb"
+        top_k: Number of top matching jobs to return (default: 10)
+        min_similarity: Minimum cosine similarity threshold (default: 0.25)
+        filter_senior_for_grads: Filter out senior roles for junior candidates (default: True)
+        model_name: Sentence-transformers model name (default: "all-MiniLM-L6-v2")
+    
+    Returns:
+        Dictionary with matched jobs, each augmented with similarity score
+    """
+    logger.info(f"Matching jobs from {jobs_source} for resume")
+    
+    # Load jobs from specified source
+    jobs = []
+    
+    if jobs_source == "mongodb":
+        # Override with environment variables
+        env_mongo = os.getenv("MONGO_URL")
+        if env_mongo:
+            if "<db_password>" in env_mongo:
+                env_mongo = env_mongo.replace("<db_password>", quote_plus(os.getenv("MONGO_PASS", "")))
+            mongo_url = env_mongo
+        else:
+            m_user = os.getenv("MONGO_USER")
+            m_pass = os.getenv("MONGO_PASS")
+            if m_user and m_pass:
+                mongo_url = f"mongodb+srv://{m_user}:{m_pass}@cluster0.xdbs2l7.mongodb.net/"
+        
+        try:
+            import pymongo
+        except ImportError:
+            logger.error("pymongo not installed")
+            return {
+                "status": "error",
+                "error": "pymongo_not_installed",
+                "matches": []
+            }
+        
+        try:
+            client = pymongo.MongoClient(mongo_url, serverSelectionTimeoutMS=5000)
+            client.admin.command("ping")
+            logger.info("Connected to MongoDB")
+            
+            db = client["jobs"]
+            col = db["jobs"]
+            
+            # Load all jobs from MongoDB
+            docs = list(col.find({}))
+            jobs = [doc.get("payload", doc) for doc in docs]
+            logger.info(f"Loaded {len(jobs)} jobs from MongoDB")
+            
+        except Exception as e:
+            logger.exception(f"Failed to load jobs from MongoDB: {e}")
+            return {
+                "status": "error",
+                "error": "mongo_connection_failed",
+                "detail": str(e),
+                "matches": []
+            }
+    
+    elif jobs_source == "file":
+        p = Path(jobs_file)
+        if not p.exists():
+            logger.warning(f"Jobs file not found: {jobs_file}")
+            return {
+                "status": "error",
+                "error": "file_not_found",
+                "path": str(p),
+                "matches": []
+            }
+        
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            
+            # Extract jobs list
+            if isinstance(data, dict):
+                for k in ("jobs", "data", "results", "items"):
+                    if k in data and isinstance(data[k], list):
+                        jobs = data[k]
+                        break
+                if not jobs:
+                    lists = [(k, v) for k, v in data.items() if isinstance(v, list)]
+                    if lists:
+                        jobs = max(lists, key=lambda kv: len(kv[1]))[1]
+            elif isinstance(data, list):
+                jobs = data
+            
+            logger.info(f"Loaded {len(jobs)} jobs from {jobs_file}")
+            
+        except Exception as e:
+            logger.exception(f"Failed to load jobs from file: {e}")
+            return {
+                "status": "error",
+                "error": "file_read_failed",
+                "detail": str(e),
+                "matches": []
+            }
+    
+    else:
+        return {
+            "status": "error",
+            "error": "invalid_jobs_source",
+            "detail": f"jobs_source must be 'mongodb' or 'file', got '{jobs_source}'",
+            "matches": []
+        }
+    
+    if not jobs:
+        logger.warning("No jobs available for matching")
+        return {
+            "status": "error",
+            "error": "no_jobs_available",
+            "matches": []
+        }
+    
+    # Perform matching
+    try:
+        matches = rank_jobs_for_resume(
+            resume,
+            jobs,
+            top_k=top_k,
+            min_similarity=min_similarity,
+            filter_senior_for_grads=filter_senior_for_grads,
+            model_name=model_name
+        )
+        
+        logger.info(f"Found {len(matches)} matching jobs")
+        
+        return {
+            "status": "success",
+            "matches": matches,
+            "total_jobs_considered": len(jobs),
+            "matches_count": len(matches),
+            "top_k": top_k,
+            "min_similarity": min_similarity
+        }
+        
+    except Exception as e:
+        logger.exception(f"Failed to match jobs: {e}")
+        return {
+            "status": "error",
+            "error": "matching_failed",
+            "detail": str(e),
+            "matches": []
+        }
+
+
+@mcp.tool()
+def match_jobs_from_resume_path(
+    resume_path: str,
+    jobs_source: str = "mongodb",
+    jobs_file: str = "jobs.json",
+    mongo_url: str = "mongodb://localhost:27017",
+    top_k: int = 10,
+    min_similarity: float = 0.25,
+    filter_senior_for_grads: bool = True,
+    model_name: str = "all-MiniLM-L6-v2"
+) -> dict:
+    """Parse resume and match jobs in one step.
+    
+    Convenience tool that combines parse_resume and match_jobs_to_resume.
+    
+    Args:
+        resume_path: Path to the resume file
+        jobs_source: Source of jobs - "mongodb" or "file" (default: "mongodb")
+        jobs_file: Path to jobs JSON file if jobs_source="file" (default: "jobs.json")
+        mongo_url: MongoDB connection URL if jobs_source="mongodb"
+        top_k: Number of top matching jobs to return (default: 10)
+        min_similarity: Minimum cosine similarity threshold (default: 0.25)
+        filter_senior_for_grads: Filter out senior roles for junior candidates (default: True)
+        model_name: Sentence-transformers model name (default: "all-MiniLM-L6-v2")
+    
+    Returns:
+        Dictionary with parsed resume info and matched jobs
+    """
+    logger.info(f"Parsing resume and matching jobs for: {resume_path}")
+    
+    # Parse resume
+    parse_result = parse_resume(resume_path=resume_path)
+    
+    if parse_result.get("status") != "success":
+        return {
+            "status": "error",
+            "error": "resume_parse_failed",
+            "parse_result": parse_result,
+            "matches": []
+        }
+    
+    parsed_resume = parse_result.get("parsed")
+    
+    # Match jobs
+    match_result = match_jobs_to_resume(
+        resume=parsed_resume,
+        jobs_source=jobs_source,
+        jobs_file=jobs_file,
+        mongo_url=mongo_url,
+        top_k=top_k,
+        min_similarity=min_similarity,
+        filter_senior_for_grads=filter_senior_for_grads,
+        model_name=model_name
+    )
+    
+    # Combine results
+    return {
+        "status": match_result.get("status"),
+        "resume_info": {
+            "name": parsed_resume.get("name"),
+            "skills_count": len(parsed_resume.get("skills", [])),
+            "experience_count": len(parsed_resume.get("experience", [])),
+            "education_count": len(parsed_resume.get("education", []))
+        },
+        "matches": match_result.get("matches", []),
+        "total_jobs_considered": match_result.get("total_jobs_considered", 0),
+        "matches_count": match_result.get("matches_count", 0),
+        "error": match_result.get("error")
+    }
+
+
+# =============================================================================
+# Tool 6: Complete Pipeline
 # =============================================================================
 
 @mcp.tool()
