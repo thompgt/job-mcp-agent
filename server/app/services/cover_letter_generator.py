@@ -191,7 +191,15 @@ def generate_cover_letter(
         "   'Dear [Company] Recruitment Team,' or 'Dear Hiring Manager,'.\n"
         "9. Do not include the candidate's email, phone, or LinkedIn inside the letter body.\n"
         "10. Do not start with 'My name is ...'; instead, jump directly into motivation and fit.\n"
-    )
+        "11. From the job description, explicitly extract 2–3 concrete details about the company, team, "
+        "    mission, product, or tech stack (only if they are actually stated) and weave them naturally "
+        "    into the letter.\n"
+        "12. Use these details to write one focused paragraph explaining why the candidate is specifically "
+        "    excited about this company and this role, not just generic enthusiasm.\n"
+        "13. Never invent company facts that are not clearly implied or stated in the job description; "
+        "    if the description is generic, keep the company-fit paragraph appropriately general.\n"
+)
+
 
     # --- Upgraded Human Prompt ---
     human_prompt = (
