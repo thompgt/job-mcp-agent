@@ -1,5 +1,7 @@
+# server/app/services/cover_letter_generator.py
+
 from __future__ import annotations
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # LangChain + Ollama
 try:
@@ -12,72 +14,121 @@ except ImportError:
 
 def _format_resume_for_prompt(resume: Dict[str, Any]) -> str:
     """
-    Convert the parsed résumé into a clean, structured summary that avoids
-    broken bullet formatting and gives the LLM predictable fields.
+    Turn the parsed resume dict (output of parse_resume_file) into a concise
+    summary for the LLM prompt.
+
+    Important design choices:
+    - We intentionally ignore long free-text "profile"/"summary"/"objective"
+      sections, since they are often generic and can make the model copy
+      low-value fluff.
+    - We compress experiences into short, information-dense snippets instead
+      of dumping raw bullet points. This encourages the model to paraphrase
+      and organize the information rather than mirror resume structure.
     """
-    lines = []
+    parts: list[str] = []
 
-    # Candidate name
+    # Candidate name (for context only, not for the model to restate literally)
     if resume.get("name"):
-        lines.append(f"Name: {resume['name']}")
+        parts.append(f"Candidate: {resume['name']}")
 
-    # Contacts
+    # Ignore raw profile/summary paragraphs here on purpose; if present in the
+    # parsed resume under keys like 'profile' or 'summary', we skip them.
+    # If in future we want to mine keywords, we can add a light keyword
+    # extraction step instead of copying the full text.
+    # profile_text = resume.get("profile") or resume.get("summary") or resume.get("objective")
+
+    # Contacts (useful for the model to infer professionalism and online presence,
+    # but not something to copy verbatim)
     contacts = resume.get("contacts", {})
-    if contacts:
-        contact_str = ", ".join(
-            f"{k}: {v}" for k, v in contacts.items() if v
-        )
-        lines.append(f"Contacts: {contact_str}")
+    contact_bits: list[str] = []
+    if contacts.get("email"):
+        contact_bits.append(f"email: {contacts['email']}")
+    if contacts.get("linkedin"):
+        contact_bits.append(f"linkedin: {contacts['linkedin']}")
+    if contacts.get("github"):
+        contact_bits.append(f"github: {contacts['github']}")
+    if contact_bits:
+        parts.append("Contacts: " + ", ".join(contact_bits))
 
-    # Skills
-    skills = resume.get("skills")
+    # Skills (keep a compact, sorted list, truncated if very long)
+    skills = resume.get("skills") or []
     if skills:
-        lines.append("Skills: " + ", ".join(sorted(skills)))
+        max_skills = 20
+        trimmed = sorted(skills)[:max_skills]
+        if len(skills) > max_skills:
+            trimmed.append("...")
+        parts.append("Skills: " + ", ".join(trimmed))
 
-    # Experience (clean structured blocks)
-    experiences = resume.get("experience", [])
-    if experiences:
-        lines.append("Experience:")
-        for exp in experiences:
-            org = exp.get("organization", "")
-            title = exp.get("title", "")
-            period = exp.get("period", "")
-            highlights = exp.get("highlights", [])
+    # Experience: turn each role into a short narrative snippet instead of raw bullets
+    experience = resume.get("experience") or []
+    exp_snippets: list[str] = []
+    for role in experience[:5]:  # cap number of roles for prompt brevity
+        if not isinstance(role, dict):
+            continue
+        org = (role.get("organization") or "").strip()
+        title = (role.get("title") or "").strip()
+        period = (role.get("period") or "").strip()
+        highlights = role.get("highlights") or []
 
-            lines.append("  - Role:")
-            if title:
-                lines.append(f"      Title: {title}")
-            if org:
-                lines.append(f"      Organization: {org}")
-            if period:
-                lines.append(f"      Period: {period}")
+        # Build a compact header
+        header_bits = [b for b in [title, org] if b]
+        header = " at ".join(header_bits)
+        if period:
+            header = f"{header} ({period})" if header else period
 
-            if highlights:
-                lines.append("      Responsibilities:")
-                for h in highlights[:3]:
-                    lines.append(f"        • {h}")
+        # Take up to 2 highlights and join them into a single descriptive phrase
+        hl_text = " ".join(h.strip() for h in highlights[:2] if isinstance(h, str))
+        if header and hl_text:
+            snippet = f"{header}: {hl_text}"
+        elif header:
+            snippet = header
+        elif hl_text:
+            snippet = hl_text
+        else:
+            snippet = ""
 
-    # Education
-    education = resume.get("education", [])
-    if education:
-        lines.append("Education:")
-        for ed in education:
-            txt = ed.get("text", "")
-            if txt:
-                lines.append(f"  - {txt}")
+        snippet = snippet.strip()
+        if snippet:
+            exp_snippets.append(snippet)
 
-    # Projects
-    projects = resume.get("projects", [])
-    if projects:
-        lines.append("Projects:")
-        for p in projects[:3]:
-            name = p.get("name", "")
-            lines.append(f"  - {name}")
-            for h in p.get("highlights", [])[:2]:
-                lines.append(f"      • {h}")
+    if exp_snippets:
+        parts.append("Experience (condensed):")
+        for s in exp_snippets:
+            parts.append(f"- {s}")
 
-    return "\n".join(lines)
+    # Education: join entries into a single line
+    education = resume.get("education") or []
+    edu_bits: list[str] = []
+    for ed in education:
+        if isinstance(ed, dict):
+            txt = (ed.get("text") or "").strip()
+        else:
+            txt = str(ed).strip()
+        if txt:
+            edu_bits.append(txt)
+    if edu_bits:
+        parts.append("Education: " + " | ".join(edu_bits))
 
+    # Projects: only the strongest 2–3, short snippets
+    projects = resume.get("projects") or []
+    proj_bits: list[str] = []
+    for proj in projects[:3]:
+        if isinstance(proj, dict):
+            name = (proj.get("name") or "").strip()
+            highlights = proj.get("highlights") or []
+            hl = " ".join(h.strip() for h in highlights[:1] if isinstance(h, str))
+        else:
+            name = str(proj).strip()
+            hl = ""
+        if name:
+            snippet = name
+            if hl:
+                snippet += f" – {hl}"
+            proj_bits.append(snippet)
+    if proj_bits:
+        parts.append("Projects: " + " | ".join(proj_bits))
+
+    return "\n".join(parts)
 
 
 def _format_job_for_prompt(job: Dict[str, Any]) -> str:
@@ -100,72 +151,6 @@ def _format_job_for_prompt(job: Dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def _summarize_experiences_as_sentences(experiences: list[dict[str, Any]]) -> list[str]:
-    """
-    Take structured experience blocks and turn each into a short readable paragraph.
-
-    Example output element:
-    "As a Quantitative Algorithm Developer Intern at RBC Capital Markets (2025 – Aug 2025),
-     I built XYZ, collaborated with ABC, and delivered DEF."
-    """
-    out: list[str] = []
-
-    for role in experiences:
-        org = role.get("organization", "")  # e.g. "Royal Bank of Canada Capital Markets, New York, NY"
-        title = role.get("title", "")        # e.g. "Quantitative Algorithm Developer Intern"
-        period = role.get("period", "")      # e.g. "2025 – Aug 2025"
-        highlights = role.get("highlights", []) or []
-
-        # Clean up org if it's like "Org, Location" and title already has org etc.
-        # (We won't over-engineer that now; just present it naturally.)
-
-        # Join first 2-3 highlights into one flowing sentence-ish block.
-        # We'll trim trailing periods to avoid "...,." issues.
-        cleaned_points = []
-        for h in highlights[:3]:
-            h_clean = h.strip()
-            # remove trailing period because we'll stitch them with commas
-            if h_clean.endswith("."):
-                h_clean = h_clean[:-1]
-            cleaned_points.append(h_clean)
-
-        # Build the "actions/results" chunk like:
-        # "I developed X, worked on Y, and improved Z."
-        action_chunk = ""
-        if len(cleaned_points) == 1:
-            action_chunk = f"I {cleaned_points[0]}."
-        elif len(cleaned_points) == 2:
-            action_chunk = f"I {cleaned_points[0]}, and I {cleaned_points[1]}."
-        elif len(cleaned_points) >= 3:
-            action_chunk = f"I {cleaned_points[0]}, {cleaned_points[1]}, and {cleaned_points[2]}."
-        else:
-            action_chunk = ""
-
-        # Build header like:
-        # "As a Quantitative Algorithm Developer Intern at Royal Bank of Canada Capital Markets (2025 – Aug 2025), ..."
-        header_bits = []
-        if title:
-            header_bits.append(f"As a {title}")
-        if org:
-            header_bits.append(f"at {org}")
-        if period:
-            header_bits.append(f"({period})")
-        header_text = " ".join(header_bits).strip()
-
-        if header_text and action_chunk:
-            paragraph = f"{header_text}, {action_chunk}"
-        elif header_text:
-            paragraph = header_text + "."
-        else:
-            # fallback if we somehow have no structured header
-            paragraph = action_chunk if action_chunk else ""
-
-        if paragraph:
-            out.append(paragraph)
-
-    return out
-
-
 def generate_cover_letter(
     resume: Dict[str, Any],
     job: Dict[str, Any],
@@ -175,33 +160,57 @@ def generate_cover_letter(
 ) -> str:
     """
     Generate a personalized cover letter using a local Ollama model via LangChain.
-    If Ollama isn't available or errors, fall back to a deterministic template.
+    If Ollama isn't available, fall back to a templated letter.
 
-    resume: dict returned by parse_resume_file(...)
-    job: dict from your job postings / queue
+    resume: dict from parse_resume_file(...)
+    job: dict from your job source / queue
     """
+
     resume_str = _format_resume_for_prompt(resume)
     job_str = _format_job_for_prompt(job)
 
+    # --- Upgraded System Prompt ---
     system_prompt = (
-        "You are an industry expert, with an extremely high IQ of 167, and a helpful assistant that writes professional and personalized "
-        "cover letters. Your letters should be concise (3–4 paragraphs), "
-        "highlight relevant skills and experiences from the candidate's résumé, "
-        "and explain why the candidate is a strong fit for the job. "
-        "If no hiring manager name is provided, start with something like "
-        "'Dear Hiring Manager,' or 'Dear [Company] Recruitment Team,'."
+        "You are an expert cover letter writer for technical and quantitative roles. "
+        "Your job is to write a professional, human-sounding cover letter that is based "
+        "on the candidate's resume and the job description, but NOT a literal restatement "
+        "of the resume.\n\n"
+        "Key requirements:\n"
+        "1. Identify 2–3 core themes in the candidate's background (e.g., research ability, "
+        "   engineering rigor, quantitative analysis, collaboration, ownership).\n"
+        "2. Merge related experiences into coherent paragraphs instead of listing each job "
+        "   separately.\n"
+        "3. Paraphrase and summarize resume details; do NOT copy bullet points or phrases verbatim.\n"
+        "4. Add small, realistic elaborations (e.g., how skills were applied, impact, what was learned) "
+        "   without inventing new factual achievements.\n"
+        "5. Use strong transitions and narrative flow; avoid repetitive sentence openings like "
+        "   'As a ...' for each role.\n"
+        "6. Integrate only the most relevant skills, rather than dumping the full skill list.\n"
+        "7. Write 3–4 paragraphs, concise but substantive.\n"
+        "8. If no hiring manager name is provided, begin with a greeting like "
+        "   'Dear [Company] Recruitment Team,' or 'Dear Hiring Manager,'.\n"
+        "9. Do not include the candidate's email, phone, or LinkedIn inside the letter body.\n"
+        "10. Do not start with 'My name is ...'; instead, jump directly into motivation and fit.\n"
     )
 
+    # --- Upgraded Human Prompt ---
     human_prompt = (
-        "Please craft a cover letter using the following job description and "
-        "candidate résumé. You may infer connections between the job's required "
-        "skills and the candidate's background. Use a confident but polite tone. "
-        "End with a brief request to interview.\n\n"
-        f"Job Details:\n{job_str}\n\n"
-        f"Candidate Résumé:\n{resume_str}"
+        "Write a tailored cover letter for the following role using the candidate's background.\n\n"
+        "Do NOT copy the resume directly. Instead, paraphrase and generalize the experience "
+        "into smooth narrative paragraphs. Focus on how the candidate's experience and skills "
+        "make them a strong fit for THIS specific job.\n\n"
+        "JOB DESCRIPTION:\n"
+        f"{job_str}\n\n"
+        "CANDIDATE RESUME (CONDENSED):\n"
+        f"{resume_str}\n\n"
+        "Instructions:\n"
+        "- Emphasize relevant experience, projects, and skills for this job.\n"
+        "- Connect past work to the responsibilities and tech stack of the role.\n"
+        "- Use a confident but modest tone; avoid exaggeration.\n"
+        "- End with a short, clear call to action about next steps (e.g., willingness to interview).\n"
     )
 
-    # Try local Ollama model first
+    # Try Ollama
     if ChatOllama is not None:
         try:
             llm = ChatOllama(
@@ -214,31 +223,28 @@ def generate_cover_letter(
                 HumanMessage(content=human_prompt),
             ]
 
-            response = llm(messages)
+            response = llm.invoke(messages)
 
             if hasattr(response, "content"):
                 return response.content.strip()
 
         except Exception:
-            # Fall through to fallback
+            # fall back below
             pass
 
-    # -------- fallback path (no LLM or LLM error) --------
-
+    # -------- fallback path (no LLM) --------
     job_title = (
         job.get("title")
         or job.get("jobTitle")
         or job.get("name")
         or "the position"
     )
-
     company_name = (
         job.get("companyName")
         or job.get("company")
         or job.get("org")
         or "the company"
     )
-
     greeting = f"Dear {company_name} Recruitment Team,"
 
     paragraphs: list[str] = []
@@ -247,105 +253,52 @@ def generate_cover_letter(
     paragraphs.append(
         f"{greeting}\n\n"
         f"I am writing to express my interest in the {job_title} role at {company_name}. "
-        "With my background and skills, I believe I would be an immediate contributor to your team."
+        "With my background in quantitative analysis, software engineering, and data-driven research, "
+        "I am confident that I can contribute meaningfully to your team."
     )
 
     # skills paragraph
     if resume.get("skills"):
         skills_list = ", ".join(sorted(resume["skills"]))
         paragraphs.append(
-            f"Throughout my academic and professional journey I have developed strengths in {skills_list}. "
-            "These technical and analytical abilities align closely with the responsibilities outlined in the posting."
+            f"Across my academic and professional experiences, I have developed a toolkit that includes "
+            f"{skills_list}. I regularly apply these skills to build robust data pipelines, analyze complex "
+            "systems, and prototype solutions in fast-moving environments."
         )
 
-    # experience paragraph(s) in natural language using highlights
-    experiences = resume.get("experience", [])
-    if experiences:
-        exp_summaries = _summarize_experiences_as_sentences(experiences[:3])
-        if exp_summaries:
+    # experience paragraph(s) – light narrative over top 2–3 roles
+    experience = resume.get("experience") or []
+    if experience:
+        exp_lines: list[str] = []
+        for role in experience[:3]:
+            if not isinstance(role, dict):
+                continue
+            org = (role.get("organization") or "").strip()
+            title = (role.get("title") or "").strip()
+            period = (role.get("period") or "").strip()
+            highlights = role.get("highlights") or []
+            header_bits = [b for b in [title, org] if b]
+            header = " at ".join(header_bits)
+            if period:
+                header = f"{header} ({period})" if header else period
+            bullet = ""
+            if highlights:
+                bullet = highlights[0].strip()
+            if header:
+                if bullet:
+                    exp_lines.append(f"In {header}, I {bullet.lower()}")
+                else:
+                    exp_lines.append(f"In {header}, I deepened my technical and analytical skills.")
+        if exp_lines:
             paragraphs.append(
-                "In my recent roles, I have built a strong foundation in quantitative analysis, research, and data-driven problem solving:"
+                "In my recent roles, I have consistently taken ownership of technically demanding work. "
+                + " ".join(exp_lines)
             )
-            for para in exp_summaries:
-                paragraphs.append(para)
 
-    # close
     paragraphs.append(
-        "I would welcome the opportunity to discuss how my skills and experience can support your goals. "
-        "Thank you for your time and consideration, and I look forward to the possibility of contributing to your team."
+        "I am excited about the opportunity to bring this experience to your organization and to learn from "
+        "a team of engineers operating at scale. I would welcome the chance to discuss how my background "
+        "aligns with your needs. Thank you for your time and consideration."
     )
 
     return "\n\n".join(paragraphs)
-
-
-if __name__ == "__main__":
-    """Simple CLI to test cover letter generation.
-
-    Usage examples (run from project root):
-      python -m server.app.services.cover_letter_generator --demo
-      python -m server.app.services.cover_letter_generator --resume-json resume.json --job-json job.json
-    """
-    import argparse
-    import json
-    from pathlib import Path
-
-    ap = argparse.ArgumentParser(description="Test cover letter generator")
-    ap.add_argument("--demo", action="store_true", help="use built-in demo resume and job")
-    ap.add_argument("--resume-json", type=str, help="path to parsed resume JSON file")
-    ap.add_argument("--job-json", type=str, help="path to job posting JSON file")
-    args = ap.parse_args()
-
-    resume = None
-    job = None
-
-    if args.demo:
-        resume = {
-            "name": "Alex Example",
-            "contacts": {"email": "alex@example.com", "phone": "+1 555 123 4567"},
-            "skills": ["python", "sql", "aws", "docker"],
-            "experience": [
-                {
-                    "organization": "ExampleCorp, Remote",
-                    "title": "Software Engineer",
-                    "period": "2022 - Present",
-                    "highlights": [
-                        "Implemented ETL pipelines that processed 10M+ records/day",
-                        "Reduced query latency by 40% through indexing and query tuning",
-                    ],
-                }
-            ],
-            "education": [{"text": "B.Sc. Computer Science, University X (2020)"}],
-            "projects": [{"name": "Smart ETL", "highlights": ["Built end-to-end ETL"]}],
-        }
-
-        job = {
-            "title": "Backend Engineer",
-            "companyName": "Acme Analytics",
-            "location": "Remote",
-            "description": "Work on data pipelines, scalable backend services, and CI/CD.",
-        }
-
-    if args.resume_json:
-        p = Path(args.resume_json)
-        if not p.exists():
-            print("resume json not found:", args.resume_json)
-            raise SystemExit(2)
-        with p.open("r", encoding="utf-8") as fh:
-            resume = json.load(fh)
-
-    if args.job_json:
-        p = Path(args.job_json)
-        if not p.exists():
-            print("job json not found:", args.job_json)
-            raise SystemExit(2)
-        with p.open("r", encoding="utf-8") as fh:
-            job = json.load(fh)
-
-    if resume is None or job is None:
-        print("Either --demo or both --resume-json and --job-json are required")
-        raise SystemExit(2)
-
-    out = generate_cover_letter(resume, job)
-    print("\n--- Generated cover letter ---\n")
-    print(out)
-

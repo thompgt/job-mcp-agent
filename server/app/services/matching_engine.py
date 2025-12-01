@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 from typing import List, Dict, Any, Optional, Tuple
-
-import math
+from datetime import datetime
+import re
 
 try:
     import numpy as np
-except ImportError:  # very unlikely, but keeps module importable
+except ImportError:  # keep module importable even if numpy is missing
     np = None  # type: ignore
 
 try:
@@ -15,7 +15,10 @@ try:
 except ImportError:
     SentenceTransformer = None  # type: ignore
 
-# Lazy-loaded global encoder
+
+# =========================
+# global encoder
+# =========================
 _ENCODER: Optional[SentenceTransformer] = None
 
 
@@ -32,10 +35,9 @@ def _get_encoder(model_name: str = "all-MiniLM-L6-v2") -> SentenceTransformer:
     return _ENCODER
 
 
-# ---------------------------------------------------------------------------
-# Text formatting helpers for embeddings
-# ---------------------------------------------------------------------------
-
+# =========================
+# text formatting helpers
+# =========================
 def _resume_to_text(resume: Dict[str, Any]) -> str:
     """Convert parsed resume dict into a single text string for embeddings."""
     parts: List[str] = []
@@ -63,7 +65,6 @@ def _resume_to_text(resume: Dict[str, Any]) -> str:
         if len(header_bits) > 2:
             header += f" ({header_bits[2]})"
 
-        # take first 1–2 bullets max; keep them short-ish
         bullet_text = " ".join(h.strip() for h in highlights[:2])
         snippet = " ".join(s for s in [header, bullet_text] if s)
         if snippet:
@@ -90,8 +91,12 @@ def _resume_to_text(resume: Dict[str, Any]) -> str:
     projects = resume.get("projects") or []
     proj_bits: List[str] = []
     for proj in projects[:3]:
-        name = (proj.get("name") or "").strip() if isinstance(proj, dict) else str(proj)
-        highlights = proj.get("highlights") if isinstance(proj, dict) else []
+        if isinstance(proj, dict):
+            name = (proj.get("name") or "").strip()
+            highlights = proj.get("highlights") or []
+        else:
+            name = str(proj)
+            highlights = []
         if name:
             snippet = name
             if highlights:
@@ -123,17 +128,25 @@ def _job_to_text(job: Dict[str, Any]) -> str:
     return "\n".join([f for f in fields if f])
 
 
-# ---------------------------------------------------------------------------
-# Seniority heuristics
-# ---------------------------------------------------------------------------
-
+# =========================
+# seniority + degree heuristics
+# =========================
 _SENIOR_TERMS = (
     "senior", "sr.", "sr ", "staff", "principal", "lead", "manager",
     "director", "vp", "vice president", "head", "architect"
 )
 
 _JUNIOR_TERMS = (
-    "junior", "intern", "internship", "graduate", "entry", "entry level", "new graduate", "analyst"
+    "junior", "intern", "internship", "graduate", "entry", "entry level"
+)
+
+_ADV_MASTERS_TERMS = (
+    "master's", "masters degree", "ms degree", "m.s.", "m.sc", "msc", "ma degree",
+    "m.eng", "meng", "graduate degree"
+)
+
+_ADV_PHD_TERMS = (
+    "phd", "ph.d", "doctorate", "doctoral degree"
 )
 
 
@@ -145,59 +158,148 @@ def _job_is_obviously_senior(job: Dict[str, Any]) -> bool:
     return any(term in combined for term in _SENIOR_TERMS)
 
 
-def _job_is_junior_friendly(job: Dict[str, Any]) -> bool:
-    """Return True if the job explicitly looks junior or open-level."""
-    title = (job.get("jobTitle") or job.get("title") or "").lower()
-    level = (job.get("jobLevel") or "").lower()
-    combined = f"{title} {level}"
+def _job_requires_masters(job: Dict[str, Any]) -> bool:
+    """Heuristic: does the job likely require at least a Master's degree?"""
+    text = (
+        (job.get("jobDescription") or "")
+        + " "
+        + (job.get("description") or "")
+        + " "
+        + (job.get("title") or "")
+    ).lower()
+    return any(term in text for term in _ADV_MASTERS_TERMS)
 
-    if any(term in combined for term in _JUNIOR_TERMS):
-        return True
 
-    # Many feeds use "Any" or blank level for open-level roles
-    if not level or level.strip().lower() in {"any", "mid", "middle"}:
-        return True
+def _job_requires_phd(job: Dict[str, Any]) -> bool:
+    """Heuristic: does the job likely require a PhD?"""
+    text = (
+        (job.get("jobDescription") or "")
+        + " "
+        + (job.get("description") or "")
+        + " "
+        + (job.get("title") or "")
+    ).lower()
+    return any(term in text for term in _ADV_PHD_TERMS)
 
-    return False
+
+def _highest_degree_level(resume: Dict[str, Any]) -> int:
+    """
+    Infer highest degree level from resume education.
+
+    Returns:
+        0 = unknown / less than bachelor
+        1 = bachelor
+        2 = master
+        3 = phd or above
+    """
+    education = resume.get("education") or []
+    level = 0
+
+    def classify(text: str) -> int:
+        txt = text.lower()
+        if any(k in txt for k in ("phd", "ph.d", "doctor", "doctoral", "dphil")):
+            return 3
+        if any(k in txt for k in ("m.sc", "msc", "ms ", "m.s.", "master", "ma ", "m.eng", "meng")):
+            return 2
+        if any(k in txt for k in ("b.sc", "bsc", "bs ", "b.s.", "b.eng", "beng", "bachelor", "ba ")):
+            return 1
+        return 0
+
+    for ed in education:
+        deg = ""
+        if isinstance(ed, dict):
+            deg = (ed.get("degree") or ed.get("text") or "").lower()
+        else:
+            deg = str(ed).lower()
+        level = max(level, classify(deg))
+    return level
+
+
+def _graduation_year_estimate(resume: Dict[str, Any]) -> Optional[int]:
+    """Approximate most recent graduation year from education entries."""
+    education = resume.get("education") or []
+    years: List[int] = []
+    year_re = re.compile(r"(19|20)\d{2}")
+    for ed in education:
+        ys = None
+        if isinstance(ed, dict):
+            if isinstance(ed.get("years"), list) and ed["years"]:
+                ys = ed["years"]
+        if ys:
+            for y in ys:
+                try:
+                    years.append(int(y))
+                except Exception:
+                    pass
+        else:
+            txt = ""
+            if isinstance(ed, dict):
+                txt = ed.get("text") or ""
+            else:
+                txt = str(ed)
+            for m in year_re.findall(txt):
+                try:
+                    years.append(int("".join(m)))
+                except Exception:
+                    pass
+    return max(years) if years else None
 
 
 def _candidate_looks_junior(resume: Dict[str, Any]) -> bool:
-    """Heuristic: treat as 'junior' if mostly internships or short experience."""
+    """
+    Heuristic: treat candidate as 'junior' if they are recently graduated
+    and/or mostly have internship / early-career roles.
+    """
     experience = resume.get("experience") or []
-    if not experience:
-        return True
-
     titles = [str(e.get("title") or "").lower() for e in experience]
-    # if most titles contain 'intern' or 'student' etc, treat as junior
+
+    # If any senior/staff/lead terms present, not junior.
+    if any(term in " ".join(titles) for term in _SENIOR_TERMS):
+        return False
+
+    # Degree + grad year based heuristic
+    degree_level = _highest_degree_level(resume)
+    grad_year = _graduation_year_estimate(resume)
+    current_year = datetime.now().year
+
+    recently_graduated = grad_year is not None and grad_year >= current_year - 2
+    still_studying = grad_year is None  # no grad year but has education entries
+
+    # Titles heuristic: mostly internships / assistant / student-like roles
     intern_like = sum(
         any(k in t for k in ("intern", "student", "research assistant", "teaching assistant"))
         for t in titles
     )
-    if intern_like >= max(1, len(titles) - 1):
-        return True
 
-    # crude: if <= 2 roles and no senior keywords, still junior
-    if len(titles) <= 2 and not any(term in " ".join(titles) for term in _SENIOR_TERMS):
+    mostly_intern = intern_like >= max(1, len(titles) - 1)
+
+    # If they only have 0–2 roles and no senior keywords, treat as junior.
+    short_history = len(titles) <= 2
+
+    if degree_level <= 1 and (recently_graduated or still_studying or mostly_intern or short_history):
         return True
 
     return False
 
 
-# ---------------------------------------------------------------------------
-# Similarity computation
-# ---------------------------------------------------------------------------
-
-def _cosine_similarity(vec_a: np.ndarray, vec_b: np.ndarray) -> float:
-    """Compute cosine similarity between two 1D vectors."""
-    denom = (np.linalg.norm(vec_a) * np.linalg.norm(vec_b))
-    if denom == 0:
-        return 0.0
-    return float(np.dot(vec_a, vec_b) / denom)
+# =========================
+# similarity computation
+# =========================
+def _cosine_similarity_matrix(job_vecs: np.ndarray, resume_vec: np.ndarray) -> np.ndarray:
+    """Compute cosine similarity between each job vector and the resume vector."""
+    # job_vecs: (n_jobs, dim), resume_vec: (dim,)
+    # Normalize just in case (if not already normalized by encoder)
+    job_norms = np.linalg.norm(job_vecs, axis=1, keepdims=True)
+    resume_norm = np.linalg.norm(resume_vec)
+    denom = job_norms * resume_norm
+    denom[denom == 0.0] = 1e-8
+    sims = (job_vecs @ resume_vec) / denom
+    return sims
 
 
 def _fallback_keyword_score(resume: Dict[str, Any], job: Dict[str, Any]) -> float:
     """
-    Very simple backup scorer if sentence-transformers isn't available:
+    Simple backup scorer if sentence-transformers isn't available:
     overlap between resume skills and job text.
     """
     skills = {s.lower() for s in (resume.get("skills") or [])}
@@ -209,10 +311,9 @@ def _fallback_keyword_score(resume: Dict[str, Any], job: Dict[str, Any]) -> floa
     return matches / float(len(skills))
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
+# =========================
+# public API
+# =========================
 def rank_jobs_for_resume(
     resume: Dict[str, Any],
     jobs: List[Dict[str, Any]],
@@ -224,7 +325,7 @@ def rank_jobs_for_resume(
 ) -> List[Dict[str, Any]]:
     """
     Rank a list of jobs for a given parsed resume using semantic similarity
-    (sentence-transformers) plus some seniority heuristics.
+    (sentence-transformers) plus seniority and degree heuristics.
 
     Parameters
     ----------
@@ -247,48 +348,73 @@ def rank_jobs_for_resume(
     list of dict
         The top-k job dicts, each augmented with a `similarity` field.
     """
-    # Optional seniority filter
     candidate_is_junior = _candidate_looks_junior(resume)
+    degree_level = _highest_degree_level(resume)
 
-    # Try semantic embeddings first, fall back to keyword scoring if unavailable.
     use_embeddings = SentenceTransformer is not None and np is not None
 
-    # Precompute resume representation
-    if use_embeddings:
-        encoder = _get_encoder(model_name)
-        resume_text = _resume_to_text(resume)
-        resume_vec = encoder.encode(resume_text)
-    else:
-        resume_vec = None  # type: ignore
-
-    ranked: List[Tuple[Dict[str, Any], float]] = []
-
+    # Pre-filter jobs according to heuristics (seniority, degree)
+    filtered_jobs: List[Dict[str, Any]] = []
     for job in jobs:
-        # Filter out obviously senior jobs for junior candidates
+        # Seniority filtering
         if filter_senior_for_grads and candidate_is_junior and _job_is_obviously_senior(job):
             continue
 
-        if use_embeddings:
-            job_text = _job_to_text(job)
-            job_vec = encoder.encode(job_text)
-            score = _cosine_similarity(resume_vec, job_vec)
-        else:
+        # Degree requirement filtering
+        if degree_level <= 1:
+            # Only undergrad / below
+            if _job_requires_phd(job) or _job_requires_masters(job):
+                continue
+        elif degree_level == 2:
+            # Master's – still filter explicit PhD-only roles
+            if _job_requires_phd(job):
+                continue
+
+        filtered_jobs.append(job)
+
+    if not filtered_jobs:
+        return []
+
+    ranked: List[Tuple[Dict[str, Any], float]] = []
+
+    if use_embeddings:
+        # --- Fast path: batch embeddings for speed ---
+        encoder = _get_encoder(model_name)
+        resume_text = _resume_to_text(resume)
+        resume_vec = encoder.encode(resume_text, convert_to_numpy=True)
+
+        job_texts = [_job_to_text(job) for job in filtered_jobs]
+        job_vecs = encoder.encode(job_texts, convert_to_numpy=True)
+
+        sims = _cosine_similarity_matrix(job_vecs, resume_vec)
+        # Ensure sims is a 1D float array
+        import numpy as _np  # local alias to avoid confusion
+        sims = _np.asarray(sims, dtype=float).reshape(-1)
+
+        for job, score in zip(filtered_jobs, sims):
+            score_val = float(score)  # now guaranteed scalar
+            if score_val >= min_similarity:
+                job_with_score = dict(job)
+                job_with_score["similarity"] = score_val
+                ranked.append((job_with_score, score_val))
+
+
+    else:
+        # --- Fallback: simple keyword overlap ---
+        for job in filtered_jobs:
             score = _fallback_keyword_score(resume, job)
+            if score >= min_similarity:
+                job_with_score = dict(job)
+                job_with_score["similarity"] = float(score)
+                ranked.append((job_with_score, score))
 
-        if score >= min_similarity:
-            job_with_score = dict(job)
-            job_with_score["similarity"] = float(score)
-            ranked.append((job_with_score, score))
-
-    # Sort by similarity descending and keep top_k
     ranked.sort(key=lambda t: t[1], reverse=True)
     return [job for job, _ in ranked[:top_k]]
 
 
-# ---------------------------------------------------------------------------
-# Dev / CLI helper
-# ---------------------------------------------------------------------------
-
+# =========================
+# CLI helper
+# =========================
 if __name__ == "__main__":
     """
     Example usage for local testing:
@@ -296,11 +422,12 @@ if __name__ == "__main__":
         python -m server.app.services.matching_engine /path/to/resume.pdf
 
     Make sure you're running this from the project root and that
-    `sentence-transformers` is installed.
+    `sentence-transformers` and `numpy` are installed.
     """
     import argparse
-    import json
     from pathlib import Path
+    import json
+
     from server.app.services.resume_parser import parse_resume_file
     from get_data import fetch_jobs  # top-level get_data.py
 
@@ -334,4 +461,3 @@ if __name__ == "__main__":
         level = j.get("jobLevel")
         sim = j.get("similarity")
         print(f"- {title} at {company} — {geo} | level={level} | similarity={sim:.3f}")
-
