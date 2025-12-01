@@ -3,8 +3,9 @@ Web Frontend for Job Application Pipeline.
 
 This provides a beautiful UI for the MCP job application pipeline with:
 - Resume upload and parsing
+- Intelligent agent-based job matching using Ollama Llama 3.2
 - Background job fetching and MongoDB population
-- Job matching and recommendations
+- Job matching and recommendations with AI reasoning
 - Job details view
 - Cover letter generation with download
 """
@@ -25,6 +26,7 @@ project_root = Path(__file__).resolve().parent
 sys.path.insert(0, str(project_root))
 
 from fastmcp import Client
+from agent import JobApplicationAgent
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -437,8 +439,9 @@ HTML_TEMPLATE = """
 <body>
     <div class="container">
         <div class="header">
-            <h1>🎯 Job Application Assistant</h1>
-            <p>Upload your resume and let AI find your perfect match</p>
+            <h1>🤖 Intelligent Job Application Agent</h1>
+            <p>Upload your resume and let our AI agent autonomously find your perfect match</p>
+            <p style="font-size: 0.9em; opacity: 0.8;">Powered by Ollama Llama 3.2</p>
         </div>
         
         <!-- Step 1: Upload Resume -->
@@ -452,6 +455,11 @@ HTML_TEMPLATE = """
             </div>
             
             <div id="progressSection" class="progress-section hidden">
+                <div class="progress-item">
+                    <div class="progress-icon">🤖</div>
+                    <div class="progress-label">AI Agent</div>
+                    <div id="agentStatus" class="status-badge status-parsing">Analyzing...</div>
+                </div>
                 <div class="progress-item">
                     <div class="progress-icon">📄</div>
                     <div class="progress-label">Resume Parsing</div>
@@ -589,19 +597,16 @@ HTML_TEMPLATE = """
                 
                 if (result.status === 'success') {
                     sessionId = result.session_id;
-                    parsedResume = result.parsed_resume;
                     
-                    // Update resume status
-                    updateStatus('resumeStatus', 'Completed', 'completed');
+                    // Update agent status
+                    updateStatus('agentStatus', 'Running...', 'parsing');
                     
-                    // Show resume info
-                    displayResumeInfo(result.parsed_resume);
-                    
-                    // Start polling for job fetch status
+                    // Start polling for agent status
                     startPolling();
                 } else {
+                    updateStatus('agentStatus', 'Error', 'error');
                     updateStatus('resumeStatus', 'Error', 'error');
-                    alert('Failed to parse resume: ' + result.error);
+                    alert('Failed to start agent: ' + result.error);
                 }
             } catch (error) {
                 updateStatus('resumeStatus', 'Error', 'error');
@@ -629,21 +634,44 @@ HTML_TEMPLATE = """
                     const response = await fetch('/api/status/' + sessionId);
                     const status = await response.json();
                     
+                    // Update agent status
+                    if (status.agent_status === 'running') {
+                        updateStatus('agentStatus', '🤖 Analyzing...', 'parsing');
+                    } else if (status.agent_status === 'completed') {
+                        updateStatus('agentStatus', '✅ Complete', 'completed');
+                    } else if (status.agent_status === 'error') {
+                        updateStatus('agentStatus', '❌ Error', 'error');
+                        clearInterval(pollInterval);
+                        return;
+                    }
+                    
+                    // Update resume parsing status
+                    if (status.resume_status === 'parsing') {
+                        updateStatus('resumeStatus', 'Parsing...', 'parsing');
+                    } else if (status.resume_status === 'completed') {
+                        updateStatus('resumeStatus', '✅ Parsed', 'completed');
+                        
+                        // Show resume info if available
+                        if (status.parsed_resume) {
+                            displayResumeInfo(status.parsed_resume);
+                        }
+                    }
+                    
                     // Update job fetch status
                     if (status.job_fetch_status === 'fetching') {
                         updateStatus('jobFetchStatus', 'Fetching...', 'fetching');
-                    } else if (status.job_fetch_status === 'populating') {
-                        updateStatus('jobFetchStatus', 'Populating DB...', 'fetching');
-                    } else if (status.job_fetch_status === 'completed' || status.job_fetch_status === 'completed_no_mongo') {
-                        updateStatus('jobFetchStatus', 'Completed', 'completed');
+                    } else if (status.job_fetch_status === 'completed') {
+                        updateStatus('jobFetchStatus', '✅ Found ' + (status.total_jobs || 0), 'completed');
                         document.getElementById('totalJobs').textContent = status.total_jobs || 0;
+                    }
+                    
+                    // Check if agent has completed everything
+                    if (status.agent_status === 'completed' && status.has_matches) {
+                        updateStatus('matchStatus', '✅ Matched', 'completed');
                         
-                        // Stop polling and start matching
+                        // Stop polling and get matches
                         clearInterval(pollInterval);
                         await matchJobs();
-                    } else if (status.job_fetch_status === 'error') {
-                        updateStatus('jobFetchStatus', 'Error', 'error');
-                        clearInterval(pollInterval);
                     }
                 } catch (error) {
                     console.error('Polling error:', error);
@@ -796,15 +824,16 @@ async def index():
 @app.post("/api/upload-resume")
 async def upload_resume(resume: UploadFile = File(...), background_tasks: BackgroundTasks = None):
     """
-    Upload and parse resume, then start background job fetching.
-    This acts as the main "agent coordinator".
+    Upload resume and trigger intelligent agent workflow.
+    The agent will autonomously handle the entire pipeline.
     """
     # Create session
     session_id = str(uuid.uuid4())
     sessions[session_id] = {
         "created_at": datetime.now(),
         "job_fetch_status": "pending",
-        "resume_status": "parsing"
+        "resume_status": "parsing",
+        "agent_status": "initializing"
     }
     
     # Save uploaded file
@@ -813,29 +842,16 @@ async def upload_resume(resume: UploadFile = File(...), background_tasks: Backgr
         with open(temp_path, "wb") as f:
             f.write(await resume.read())
         
-        # Parse resume (Agent 1)
-        logger.info(f"[{session_id}] Parsing resume")
-        parse_result = await call_mcp_tool("parse_resume", {
-            "resume_path": str(temp_path.absolute())
-        })
+        sessions[session_id]["resume_path"] = str(temp_path.absolute())
         
-        if parse_result.get("status") != "success":
-            return JSONResponse({
-                "status": "error",
-                "error": "resume_parse_failed",
-                "detail": parse_result.get("error", "Unknown error")
-            })
-        
-        sessions[session_id]["parsed_resume"] = parse_result.get("parsed")
-        sessions[session_id]["resume_status"] = "completed"
-        
-        # Start background job fetching (Agent 2)
-        background_tasks.add_task(background_job_fetching, session_id, 50)
+        # Start intelligent agent workflow in background
+        logger.info(f"[{session_id}] Starting intelligent agent workflow")
+        background_tasks.add_task(run_agent_workflow, session_id, str(temp_path.absolute()))
         
         return JSONResponse({
             "status": "success",
             "session_id": session_id,
-            "parsed_resume": parse_result.get("parsed")
+            "message": "Agent workflow started"
         })
         
     except Exception as e:
@@ -844,62 +860,111 @@ async def upload_resume(resume: UploadFile = File(...), background_tasks: Backgr
             "status": "error",
             "error": str(e)
         })
+
+async def run_agent_workflow(session_id: str, resume_path: str):
+    """Run the intelligent agent workflow."""
+    try:
+        sessions[session_id]["agent_status"] = "running"
+        sessions[session_id]["resume_status"] = "parsing"
+        sessions[session_id]["job_fetch_status"] = "fetching"
+        
+        logger.info(f"[{session_id}] Agent starting job search workflow")
+        
+        # Run intelligent agent
+        async with JobApplicationAgent(model_name="llama3.2") as agent:
+            result = await agent.execute_job_search(
+                resume_path=resume_path,
+                preferences={
+                    "job_count": 50,
+                    "top_k": 6
+                }
+            )
+            
+            if result["status"] == "success":
+                # Update session with results
+                sessions[session_id]["agent_status"] = "completed"
+                sessions[session_id]["resume_status"] = "completed"
+                sessions[session_id]["job_fetch_status"] = "completed"
+                sessions[session_id]["parsed_resume"] = result["candidate"]
+                sessions[session_id]["matches"] = result["job_search"]["matches"]
+                sessions[session_id]["total_jobs"] = result["job_search"]["total_jobs_fetched"]
+                sessions[session_id]["agent_reasoning"] = result["agent_reasoning"]
+                
+                logger.info(f"[{session_id}] Agent workflow completed successfully")
+            else:
+                sessions[session_id]["agent_status"] = "error"
+                sessions[session_id]["agent_error"] = result.get("reason", "Unknown error")
+                logger.error(f"[{session_id}] Agent workflow failed: {result.get('reason')}")
+                
+    except Exception as e:
+        logger.exception(f"[{session_id}] Error in agent workflow: {e}")
+        sessions[session_id]["agent_status"] = "error"
+        sessions[session_id]["agent_error"] = str(e)
     finally:
         # Clean up temp file
+        temp_path = Path(resume_path)
         if temp_path.exists():
-            temp_path.unlink()
+            try:
+                temp_path.unlink()
+            except:
+                pass
 
 @app.get("/api/status/{session_id}")
 async def get_status(session_id: str):
-    """Get the current status of the session."""
+    """Get the current status of the agent workflow."""
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
     
     session = sessions[session_id]
+    
+    # If agent completed, return parsed resume info
+    parsed_resume = None
+    if session.get("agent_status") == "completed" and session.get("parsed_resume"):
+        candidate = session.get("parsed_resume")
+        parsed_resume = {
+            "name": candidate.get("name"),
+            "skills_count": candidate.get("skills_count", 0),
+            "experience_count": candidate.get("experience_count", 0),
+            "education_count": candidate.get("education_count", 0)
+        }
+    
     return JSONResponse({
+        "agent_status": session.get("agent_status", "unknown"),
         "resume_status": session.get("resume_status", "unknown"),
         "job_fetch_status": session.get("job_fetch_status", "pending"),
         "total_jobs": session.get("total_jobs", 0),
-        "error": session.get("job_fetch_error")
+        "error": session.get("agent_error") or session.get("job_fetch_error"),
+        "parsed_resume": parsed_resume,
+        "has_matches": len(session.get("matches", [])) > 0
     })
 
 @app.post("/api/match-jobs/{session_id}")
 async def match_jobs(session_id: str, request: Request):
     """
-    Match jobs to the parsed resume.
-    This is called after both agents complete.
+    Return the matches that were already computed by the agent.
+    The agent handles all matching logic autonomously.
     """
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
     
     session = sessions[session_id]
-    parsed_resume = session.get("parsed_resume")
-    jobs_file = session.get("jobs_file", f"jobs_{session_id}.json")
+    matches = session.get("matches", [])
     
-    if not parsed_resume:
+    if not matches:
         return JSONResponse({
             "status": "error",
-            "error": "no_parsed_resume"
+            "error": "no_matches_available",
+            "message": "Agent workflow may still be running or failed"
         })
     
-    data = await request.json()
-    top_k = data.get("top_k", 6)
-    
-    logger.info(f"[{session_id}] Matching jobs")
-    
-    # Call matching tool
-    match_result = await call_mcp_tool("match_jobs_to_resume", {
-        "resume": parsed_resume,
-        "jobs_source": "file",
-        "jobs_file": jobs_file,
-        "top_k": top_k,
-        "min_similarity": 0.2
+    # Return agent-computed matches
+    return JSONResponse({
+        "status": "success",
+        "matches": matches,
+        "total_jobs_considered": session.get("total_jobs", 0),
+        "matches_count": len(matches),
+        "agent_reasoning": session.get("agent_reasoning")
     })
-    
-    if match_result.get("status") == "success":
-        sessions[session_id]["matches"] = match_result.get("matches", [])
-    
-    return JSONResponse(match_result)
 
 @app.post("/api/generate-cover-letter/{session_id}")
 async def generate_cover_letter_endpoint(session_id: str, request: Request):
