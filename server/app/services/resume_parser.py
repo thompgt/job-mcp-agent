@@ -1,19 +1,6 @@
 # server/app/services/resume_parser.py
 from __future__ import annotations
 
-"""
-Resume parsing service.
-
-Improvements over the original:
-- Configurable spaCy model via SPACY_MODEL_NAME env var
-- Extendable skill vocabulary via SKILL_VOCAB_PATH env var
-- More robust PDF loading with explicit OCR flag
-- Extra metadata in output (skills_count, experience_count, education_count,
-  sections_detected, parse_warnings, used_ocr, source_path)
-- Keeps the original public API: load_text_from_file, parse_resume_text,
-  parse_resume_file
-"""
-
 # stdlib
 import os
 import re
@@ -29,20 +16,10 @@ from docx import Document
 import fitz  # PyMuPDF
 
 # =========================
-# env toggles / config
+# env toggle
 # =========================
-
 # FAST_PARSE=1 -> skip OCR and layout segmentation for speed on clean PDFs
 FAST_PARSE = os.getenv("FAST_PARSE", "0") == "1"
-
-# spaCy model can be swapped without code changes (e.g. en_core_web_trf)
-SPACY_MODEL_NAME = os.getenv("SPACY_MODEL_NAME", "en_core_web_sm")
-
-# Optional external skill vocab file (one skill term per line)
-SKILL_VOCAB_PATH = os.getenv("SKILL_VOCAB_PATH")
-
-# Track last load OCR usage (used for metadata)
-_LAST_LOAD_USED_OCR: bool = False
 
 # =========================
 # lazy spaCy and matcher
@@ -50,161 +27,94 @@ _LAST_LOAD_USED_OCR: bool = False
 _NLP: Optional[spacy.language.Language] = None
 _MATCHER: Optional[PhraseMatcher] = None
 
-
 def _get_nlp() -> spacy.language.Language:
-    """Lazy-load spaCy model, configurable by env."""
+    # lazy load spaCy model
     global _NLP
     if _NLP is None:
-        _NLP = spacy.load(SPACY_MODEL_NAME)
-        # ensure we have sentence boundaries even in small models
+        _NLP = spacy.load("en_core_web_sm")
         if "sentencizer" not in _NLP.pipe_names:
             _NLP.add_pipe("sentencizer")
     return _NLP
 
-
-# Base skill dictionary (extendable via SKILL_VOCAB_PATH)
-_BASE_SKILL_TERMS = [
-    # programming languages
+# skill dictionary (extendable)
+_SKILL_TERMS = [
     "python", "java", "javascript", "typescript", "c++", "c", "go", "rust", "sql", "r",
-    # data / ml
     "pandas", "numpy", "scikit-learn", "tensorflow", "pytorch",
     "spark", "hadoop", "airflow", "dbt",
-    # cloud / infra
     "aws", "gcp", "azure", "docker", "kubernetes", "terraform", "linux",
-    # data stores
     "postgresql", "mysql", "snowflake", "bigquery", "redshift",
-    # tools / libs
     "git", "regex", "spacy", "fastapi",
 ]
 
-
-def _load_skill_terms() -> List[str]:
-    """Combine base skill terms with optional extra vocab from file."""
-    terms = list(_BASE_SKILL_TERMS)
-    if SKILL_VOCAB_PATH:
-        path = Path(SKILL_VOCAB_PATH)
-        if path.exists():
-            try:
-                extra = [
-                    line.strip()
-                    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines()
-                    if line.strip()
-                ]
-                terms.extend(extra)
-            except Exception:
-                # fail silently; we still have base terms
-                pass
-    # dedupe while preserving order
-    seen = set()
-    uniq: List[str] = []
-    for t in terms:
-        key = t.lower()
-        if key not in seen:
-            seen.add(key)
-            uniq.append(t)
-    return uniq
-
-
 def _get_matcher() -> PhraseMatcher:
-    """Lazy-init PhraseMatcher for skills."""
+    # lazy init PhraseMatcher
     global _MATCHER
     if _MATCHER is None:
         nlp = _get_nlp()
         _MATCHER = PhraseMatcher(nlp.vocab, attr="LOWER")
-        for term in _load_skill_terms():
-            _MATCHER.add("SKILLS", [nlp.make_doc(term)])
+        _MATCHER.add("SKILLS", [nlp.make_doc(t) for t in _SKILL_TERMS])
     return _MATCHER
-
 
 # =========================
 # file readers with OCR fallback
 # =========================
-
 def _read_pdf(path: Path) -> str:
     reader = PdfReader(str(path))
     return "\n".join((page.extract_text() or "") for page in reader.pages)
-
 
 def _read_docx(path: Path) -> str:
     doc = Document(str(path))
     return "\n".join(p.text for p in doc.paragraphs)
 
-
 def _read_txt(path: Path) -> str:
     return Path(path).read_text(encoding="utf-8", errors="ignore")
 
-
 def _ocr_image_pil(img) -> str:
+    # OCR on PIL image page
     import pytesseract
     return pytesseract.image_to_string(img)
 
-
 def _ocr_pdf(path: Path) -> str:
+    # page images -> OCR
     from pdf2image import convert_from_path
     pages = convert_from_path(str(path))
     return "\n".join(_ocr_image_pil(pg) for pg in pages)
 
-
 def load_text_from_file(path: str | Path) -> str:
-    """
-    Unified loader with optional OCR for image-like PDFs.
-
-    Public API kept the same: returns text string.
-    Internally we also update _LAST_LOAD_USED_OCR for metadata.
-    """
-    global _LAST_LOAD_USED_OCR
-    _LAST_LOAD_USED_OCR = False
-
+    # unified loader with optional OCR
     path = Path(path)
     sfx = path.suffix.lower()
-
     if sfx == ".pdf":
-        # fast path: just pypdf
         if FAST_PARSE:
             return _read_pdf(path)
-
         text = _read_pdf(path)
-        # If text is suspiciously short, attempt OCR as fallback
         if not text or len(text.strip()) < 20:
             try:
                 text = _ocr_pdf(path)
-                if text and len(text.strip()) > 0:
-                    _LAST_LOAD_USED_OCR = True
             except Exception:
-                # if OCR fails, just return whatever we had
                 pass
         return text
-
     if sfx in (".docx", ".doc"):
         return _read_docx(path)
-
-    # default: plain text
     return _read_txt(path)
-
 
 # =========================
 # regexes
 # =========================
-
-EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-PHONE_RE = re.compile(r"(?:\+?\d{1,3}[\s\-]*)?(?:\(?\d{2,4}\)?[\s\-]*){2,4}\d{2,4}")
+EMAIL_RE  = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+PHONE_RE  = re.compile(r"(?:\+?\d{1,3}[\s\-]*)?(?:\(?\d{2,4}\)?[\s\-]*){2,4}\d{2,4}")
 LINKEDIN_RE = re.compile(r"(?:https?://)?(?:www\.)?linkedin\.com/[A-Za-z0-9_/\-]+", re.I)
-GITHUB_RE = re.compile(r"(?:https?://)?(?:www\.)?github\.com/[A-Za-z0-9_\-/.]+", re.I)
+GITHUB_RE   = re.compile(r"(?:https?://)?(?:www\.)?github\.com/[A-Za-z0-9_\-/.]+", re.I)
 
-DEGREE_RE = re.compile(
-    r"\b(B\.?Sc|B\.?S|M\.?Sc|M\.?S|B\.?Eng|M\.?Eng|Ph\.?D|Bachelor|Master|Doctor|BA|MA)\b",
-    re.I,
-)
-YEAR_RE = re.compile(r"\b(20\d{2}|19\d{2})\b")
+DEGREE_RE = re.compile(r"\b(B\.?Sc|B\.?S|M\.?Sc|M\.?S|B\.?Eng|M\.?Eng|Ph\.?D|Bachelor|Master|Doctor|BA|MA)\b", re.I)
+YEAR_RE   = re.compile(r"\b(20\d{2}|19\d{2})\b")
 
 MONTH_RX = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*"
 YEAR_ONLY = r"(?:19|20)\d{2}"
 RANGE_SEP = r"\s*[—\-–]\s*"
-PRESENT = r"(?:Present|PRESENT|present)"
+PRESENT   = r"(?:Present|PRESENT|present)"
 DATE_RANGE_RE = re.compile(
-    rf"(?:{MONTH_RX}\s+\d{{4}}|{YEAR_ONLY})"
-    rf"{RANGE_SEP}"
-    rf"(?:{MONTH_RX}\s+\d{{4}}|{YEAR_ONLY}|{PRESENT})",
+    rf"(?:{MONTH_RX}\s+\d{{4}}|{YEAR_ONLY}){RANGE_SEP}(?:{MONTH_RX}\s+\d{{4}}|{YEAR_ONLY}|{PRESENT})",
     re.I,
 )
 
@@ -240,43 +150,34 @@ CANONICAL_SECTIONS = {
     "extra-curricular": ["extra-curricular activities", "extracurricular", "activities", "volunteering"],
     "awards": ["awards", "honors", "achievements"],
 }
-ALL_HEADER_VARIANTS = {
-    alias: key
-    for key, aliases in CANONICAL_SECTIONS.items()
-    for alias in ([key] + aliases)
-}
+ALL_HEADER_VARIANTS = {alias: key for key, aliases in CANONICAL_SECTIONS.items() for alias in ([key] + aliases)}
 
 NAME_BLACKLIST = {
     "education", "experience", "work experience", "skills", "projects",
-    "profile", "contact", "contacts", "summary",
+    "profile", "contact", "contacts", "summary"
 }
 
 BULLET_HEAD = re.compile(r"^[•\-\*\u2022]\s*")
 MONTH_WORD = re.compile(r"^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*$", re.I)
 
-
 # =========================
 # contact / name / skills
 # =========================
-
 def _norm_url(u: Optional[str]) -> Optional[str]:
     if not u:
         return None
     return u if u.startswith(("http://", "https://")) else "https://" + u
 
-
 def _extract_contacts(text: str) -> Dict[str, Optional[str]]:
     def g(rx):
         m = rx.search(text)
         return m.group(0) if m else None
-
     return {
         "email": g(EMAIL_RE),
         "phone": g(PHONE_RE),
         "linkedin": _norm_url(g(LINKEDIN_RE)),
         "github": _norm_url(g(GITHUB_RE)),
     }
-
 
 def _looks_like_name(line: str) -> bool:
     t = re.sub(r"[^A-Za-z\s\-']", " ", line).strip()
@@ -289,21 +190,17 @@ def _looks_like_name(line: str) -> bool:
         return False
     return all(2 <= len(w) <= 20 and re.fullmatch(r"[A-Za-z\-']+", w) for w in words)
 
-
 def _extract_name(doc: "spacy.tokens.Doc") -> Optional[str]:
-    # First try the top few lines (most resumes)
     for ln in [ln.strip() for ln in doc.text.splitlines()[:5] if ln.strip()]:
         if _looks_like_name(ln):
             return ln.title() if ln.isupper() else ln
-    # Fallback to PERSON entities
     for ent in doc.ents:
         if ent.label_ == "PERSON" and ent.text.lower() not in NAME_BLACKLIST:
             return ent.text.strip()
     return None
 
-
 def _extract_skills(doc: "spacy.tokens.Doc") -> List[str]:
-    # Sentence-level matching to reduce false positives
+    # sentence-level matching to reduce false positives
     matcher = _get_matcher()
     skills = set()
     for sent in doc.sents:
@@ -311,59 +208,39 @@ def _extract_skills(doc: "spacy.tokens.Doc") -> List[str]:
             skills.add(doc[s:e].text.lower())
     return sorted(skills)
 
-
 # =========================
 # text-based section split
 # =========================
-
 def _looks_like_header(line: str) -> bool:
     t = line.strip()
     if not t:
         return False
-    # all caps or mostly caps, short-ish line
     return bool(re.fullmatch(r"[A-Z0-9 &/\-]{4,}", t))
-
 
 def _normalize_header_name(name: str) -> Optional[str]:
     n = name.lower()
-    if "education" in n:
-        return "education"
-    if "work" in n and "experience" in n:
-        return "work experience"
-    if "intern" in n and "experience" in n:
-        return "internship experience"
-    if "experience" in n:
-        return "experience"
-    if "profile" in n:
-        return "profile"
-    if "contact" in n:
-        return "contact"
-    if "skill" in n:
-        return "skills"
-    if "academic" in n and "project" in n:
-        return "academic projects"
-    if "project" in n:
-        return "projects"
-    if "certif" in n:
-        return "certifications"
-    if "extra" in n and "curricular" in n:
-        return "extra-curricular"
+    if "education" in n: return "education"
+    if "work" in n and "experience" in n: return "work experience"
+    if "intern" in n and "experience" in n: return "internship experience"
+    if "experience" in n: return "experience"
+    if "profile" in n: return "profile"
+    if "contact" in n: return "contact"
+    if "skill" in n: return "skills"
+    if "academic" in n and "project" in n: return "academic projects"
+    if "project" in n: return "projects"
+    if "certif" in n: return "certifications"
+    if "extra" in n and "curricular" in n: return "extra-curricular"
     return None
 
-
 def _split_sections(text: str) -> Dict[str, str]:
-    """
-    Split resume into sections using explicit headers (e.g. EDUCATION, EXPERIENCE).
-    """
+    # split by headers; content starts from the next line
     lines = text.splitlines(keepends=True)
     full_text = "".join(lines)
     marks: List[Tuple[str, int]] = []
 
-    # Regex-based explicit headers
     for m in SECTION_RE.finditer(full_text):
         marks.append((m.group(1).lower(), m.end()))
 
-    # All-caps or header-like lines
     offset = 0
     for ln in lines:
         raw = ln.rstrip("\n")
@@ -384,41 +261,36 @@ def _split_sections(text: str) -> Dict[str, str]:
         sections[nm] = chunk
     return sections
 
-
 # =========================
 # layout-based section split
 # =========================
-
 def _pdf_lines_with_layout(path: Path) -> List[Dict]:
-    """Extract per-line text with basic font features from PDF via PyMuPDF."""
+    # extract per-line text with basic font features
     doc = fitz.open(str(path))
     lines = []
-    try:
-        for page in doc:
-            blocks = page.get_text("dict")["blocks"]
-            for b in blocks:
-                if "lines" not in b:
+    for page in doc:
+        blocks = page.get_text("dict")["blocks"]
+        for b in blocks:
+            if "lines" not in b:
+                continue
+            for ln in b["lines"]:
+                texts, sizes, flags = [], [], []
+                for sp in ln.get("spans", []):
+                    if sp.get("text"):
+                        texts.append(sp["text"])
+                    sizes.append(sp.get("size", 0))
+                    flags.append(sp.get("flags", 0))
+                if not texts:
                     continue
-                for ln in b["lines"]:
-                    texts, sizes, flags = [], [], []
-                    for sp in ln.get("spans", []):
-                        if sp.get("text"):
-                            texts.append(sp["text"])
-                        sizes.append(sp.get("size", 0))
-                        flags.append(sp.get("flags", 0))
-                    if not texts:
-                        continue
-                    t = "".join(texts).strip()
-                    if not t:
-                        continue
-                    avg_size = sum(sizes) / max(len(sizes), 1)
-                    is_bold = any((f & 1) == 1 for f in flags)
-                    bbox = ln.get("bbox")
-                    lines.append({"text": t, "size": avg_size, "bold": is_bold, "bbox": bbox})
-    finally:
-        doc.close()
+                t = "".join(texts).strip()
+                if not t:
+                    continue
+                avg_size = sum(sizes) / max(len(sizes), 1)
+                is_bold = any((f & 1) == 1 for f in flags)
+                bbox = ln.get("bbox")
+                lines.append({"text": t, "size": avg_size, "bold": is_bold, "bbox": bbox})
+    doc.close()
     return lines
-
 
 def _normalize_header_freeform(name: str) -> Optional[str]:
     s = re.sub(r"[^A-Za-z0-9 &/\-]", " ", name).strip().lower()
@@ -433,12 +305,11 @@ def _normalize_header_freeform(name: str) -> Optional[str]:
             best_sim, best_key = sim, key
     return best_key if best_sim >= 0.65 else None
 
-
 def _detect_section_headers_from_layout(lines: List[Dict]) -> List[Tuple[str, int]]:
     if not lines:
         return []
     sizes = [x["size"] for x in lines]
-    median = sorted(sizes)[len(sizes) // 2]
+    median = sorted(sizes)[len(sizes)//2]
     big_threshold = median * 1.15
 
     headers = []
@@ -449,12 +320,7 @@ def _detect_section_headers_from_layout(lines: List[Dict]) -> List[Tuple[str, in
         letters = [c for c in text if c.isalpha()]
         is_caps = (len(letters) >= 3 and sum(c.isupper() for c in letters) / len(letters) > 0.7)
         is_short = len(text.split()) <= 6
-        has_rule_word = bool(
-            re.search(
-                r"(experience|education|profile|project|skill|certif|intern|activity|activities)",
-                text, re.I
-            )
-        )
+        has_rule_word = bool(re.search(r"(experience|education|profile|project|skill|certif|intern|activity|activities)", text, re.I))
         if (is_big or row["bold"]) and (is_caps or is_short or has_rule_word):
             canon = _normalize_header_freeform(text)
             if canon:
@@ -467,14 +333,8 @@ def _detect_section_headers_from_layout(lines: List[Dict]) -> List[Tuple[str, in
         dedup.append((k, idx))
     return dedup
 
-
 def _split_sections_by_layout(path: Path) -> Optional[Dict[str, str]]:
-    """
-    Use PDF layout segmentation to infer sections.
-
-    This can capture resumes where headers are purely visual (font size/bold),
-    not explicit all-caps text.
-    """
+    # use layout segmentation if available
     try:
         lines = _pdf_lines_with_layout(path)
         if not lines:
@@ -487,7 +347,6 @@ def _split_sections_by_layout(path: Path) -> Optional[Dict[str, str]]:
         for l in lines:
             offsets.append(pos)
             pos += len(l["text"]) + 1
-
         out: Dict[str, str] = {}
         for i, (key, line_idx) in enumerate(headers):
             start = offsets[min(line_idx + 1, len(offsets) - 1)]
@@ -499,41 +358,33 @@ def _split_sections_by_layout(path: Path) -> Optional[Dict[str, str]]:
     except Exception:
         return None
 
-
 # =========================
 # education / experience / projects utils
 # =========================
-
 def _extract_education(section: str) -> List[Dict[str, str]]:
     rows: List[Dict[str, str]] = []
     for line in section.splitlines():
         deg = DEGREE_RE.search(line)
         yrs = YEAR_RE.findall(line)
         if deg or yrs:
-            rows.append(
-                {
-                    "text": line.strip(),
-                    "degree": deg.group(0) if deg else None,
-                    "years": (yrs[-2:] if yrs else None),
-                }
-            )
+            rows.append({
+                "text": line.strip(),
+                "degree": deg.group(0) if deg else None,
+                "years": (yrs[-2:] if yrs else None),
+            })
     return rows
-
 
 _HEADER_NAMES = {
     "professional experience", "work experience", "experience",
     "internship experience", "leadership & projects", "additional projects",
     "academic projects", "projects", "education", "skills",
-    "profile", "contact", "contacts", "extra-curricular",
+    "profile", "contact", "contacts", "extra-curricular"
 }
 
-
 def _reflow_lines_for_highlights(lines: List[str]) -> List[str]:
-    """Join wrapped lines into sentence-like bullets."""
+    # join wrapped lines into sentence-like bullets
     END = re.compile(r"[.;:)\]%]\s*$")
-    out: List[str] = []
-    buf: List[str] = []
-
+    out, buf = [], []
     def flush():
         if buf:
             merged = " ".join(s.strip() for s in buf).strip()
@@ -542,7 +393,6 @@ def _reflow_lines_for_highlights(lines: List[str]) -> List[str]:
             merged = re.sub(r"\s{2,}", " ", merged)
             out.append(merged)
             buf.clear()
-
     for ln in lines:
         if not buf:
             buf.append(ln)
@@ -555,14 +405,12 @@ def _reflow_lines_for_highlights(lines: List[str]) -> List[str]:
     flush()
     return [s for s in out if len(s) >= 3]
 
-
 def _location_like_text() -> re.Pattern:
     return re.compile(
         r"^(?:[A-Z][a-z]+(?:\s[A-Z][a-z]+)*,\s?(?:[A-Z]{2}|[A-Z][a-z]+)|"
         r"(?:Seoul|South Korea|New York, NY|New York|NY|KR))$",
-        re.I,
+        re.I
     )
-
 
 def _clean_title(t: str) -> str:
     # remove month-only false titles like 'Jun', 'Oct', 'May'
@@ -570,7 +418,6 @@ def _clean_title(t: str) -> str:
     if MONTH_WORD.fullmatch(t):
         return ""
     return t
-
 
 def _extract_experience(section: str) -> List[Dict[str, str]]:
     # build experience blocks: organization -> title(+period) -> highlights
@@ -587,10 +434,7 @@ def _extract_experience(section: str) -> List[Dict[str, str]]:
     role_plus_date = re.compile(rf"^(.+?)\s+({DATE_RANGE_RE.pattern})$", re.I)
     date_range_only = re.compile(rf"^\s*({DATE_RANGE_RE.pattern})\s*$", re.I)
     location_like = _location_like_text()
-    role_keywords = re.compile(
-        r"(engineer|tutor|manager|lead|leader|board|analyst|developer|research|intern|specialist)",
-        re.I,
-    )
+    role_keywords = re.compile(r"(engineer|tutor|manager|lead|leader|board|analyst|developer|research|intern|specialist)", re.I)
 
     def flush():
         nonlocal cur
@@ -615,10 +459,8 @@ def _extract_experience(section: str) -> List[Dict[str, str]]:
 
         # merge pattern: role-only -> location -> (role+date | date-only)
         if role_keywords.search(ln) and not date_range_only.match(ln):
-            if (
-                i + 2 < len(lines)
-                and location_like.match(lines[i + 1])
-                and (role_plus_date.match(lines[i + 2]) or date_range_only.match(lines[i + 2]))
+            if i + 2 < len(lines) and location_like.match(lines[i + 1]) and (
+                role_plus_date.match(lines[i + 2]) or date_range_only.match(lines[i + 2])
             ):
                 if cur:
                     flush()
@@ -646,12 +488,7 @@ def _extract_experience(section: str) -> List[Dict[str, str]]:
         if dm:
             if cur is None:
                 cur = {"organization": "", "title": "", "period": None, "desc_buf": []}
-            if (
-                not cur.get("title")
-                and i > 0
-                and role_keywords.search(lines[i - 1])
-                and not date_range_only.match(lines[i - 1])
-            ):
+            if not cur.get("title") and i > 0 and role_keywords.search(lines[i - 1]) and not date_range_only.match(lines[i - 1]):
                 cur["title"] = _clean_title(lines[i - 1])
             cur["period"] = dm.group(1).strip()
             i += 1
@@ -701,7 +538,6 @@ def _extract_experience(section: str) -> List[Dict[str, str]]:
     flush()
     return exps
 
-
 def _extract_projects(section: str) -> List[Dict[str, Optional[str]]]:
     # parse projects from project-like sections, keeping headers as names and verb-led lines as highlights
     lines = [BULLET_HEAD.sub("", ln).strip() for ln in section.splitlines() if ln.strip()]
@@ -711,14 +547,10 @@ def _extract_projects(section: str) -> List[Dict[str, Optional[str]]]:
 
     date_only = re.compile(rf"^\s*({DATE_RANGE_RE.pattern})\s*$", re.I)
     VERB_START = re.compile(
-        r"^(Built|Designed|Orchestrated|Implemented|Provisioned|Containerized|Drafted|Prototyped|Defined|"
-        r"Planned|Created|Developed|Improved|Set\s+up|Established)\b",
+        r"^(Built|Designed|Orchestrated|Implemented|Provisioned|Containerized|Drafted|Prototyped|Defined|Planned|Created|Developed|Improved|Set\s+up|Established)\b",
         re.I,
     )
-    role_keywords = re.compile(
-        r"(engineer|tutor|leader|board|analyst|developer|manager|intern|collaborator|co[- ]founder|research)",
-        re.I,
-    )
+    role_keywords = re.compile(r"(engineer|tutor|leader|board|analyst|developer|manager|intern|collaborator|co[- ]founder|research)", re.I)
     location_like = _location_like_text()
 
     def looks_like_header(s: str) -> bool:
@@ -785,7 +617,7 @@ def _extract_projects(section: str) -> List[Dict[str, Optional[str]]]:
             "role": role,
             "location": location,
             "period": period,
-            "highlights": highlights,
+            "highlights": highlights
         }
 
     for b in blocks:
@@ -795,7 +627,6 @@ def _extract_projects(section: str) -> List[Dict[str, Optional[str]]]:
 
     out = [p for p in out if p.get("name") or p.get("highlights")]
     return out
-
 
 def _extract_leadership_roles(section: str) -> List[Dict[str, str]]:
     # parse leadership roles like "Executive Board" into experience-like blocks
@@ -858,21 +689,10 @@ def _extract_leadership_roles(section: str) -> List[Dict[str, str]]:
     flush()
     return exps
 
-
 # =========================
 # top-level parse
 # =========================
-
 def parse_resume_text(text: str, sections_override: Optional[Dict[str, str]] = None) -> Dict:
-    """
-    Main parsing entrypoint for plain text resumes.
-
-    Returns a dict with:
-      - name, contacts, skills, education, experience, projects
-      - raw_length
-      - skills_count, experience_count, education_count
-      - sections_detected, parse_warnings
-    """
     # light normalize
     clean = re.sub(r"[ \t]+", " ", text.replace("\r", "\n"))
     clean = re.sub(r"[\u2022\u2023\u25E6\u2043\u2219]", "•", clean)
@@ -885,7 +705,6 @@ def parse_resume_text(text: str, sections_override: Optional[Dict[str, str]] = N
     name = _extract_name(doc)
     skills = _extract_skills(doc)
 
-    # sections: either forced override (layout) or regex-based
     sections_src = sections_override if sections_override else _split_sections(clean)
     sections = {(k.lower() if k else k): v for k, v in sections_src.items()}
 
@@ -907,8 +726,7 @@ def parse_resume_text(text: str, sections_override: Optional[Dict[str, str]] = N
         if key in sections:
             projects.extend(_extract_projects(sections[key]))
 
-    sections_detected = list(sections.keys())
-    result: Dict[str, object] = {
+    return {
         "name": name,
         "contacts": contacts,
         "skills": sorted(skills),
@@ -916,51 +734,16 @@ def parse_resume_text(text: str, sections_override: Optional[Dict[str, str]] = N
         "experience": experience,
         "projects": projects,
         "raw_length": len(clean),
-        "skills_count": len(skills),
-        "experience_count": len(experience),
-        "education_count": len(education),
-        "sections_detected": sections_detected,
     }
 
-    # lightweight quality / warning flags
-    warnings: List[str] = []
-    if len(sections_detected) <= 1:
-        warnings.append("no_section_headers_detected")
-    if not skills:
-        warnings.append("no_skills_detected")
-    if not education:
-        warnings.append("no_education_detected")
-    if not experience:
-        warnings.append("no_experience_detected")
-    if len(clean) < 500:
-        warnings.append("very_short_document")
-    result["parse_warnings"] = warnings
-
-    return result
-
-
 def parse_resume_file(path: str | Path) -> Dict:
-    """
-    Main entry used by other services / FastAPI routes.
-
-    - Loads text (with optional OCR)
-    - Uses layout-based segmentation for PDFs when available
-    - Calls parse_resume_text(...)
-    - Adds used_ocr and source_path metadata
-    """
+    # main entry used by FastAPI route
     path = Path(path)
     text = load_text_from_file(path)
-
     sections_override = None
     if path.suffix.lower() == ".pdf" and not FAST_PARSE:
-        # layout-based segmentation; if it fails, we fall back to regex split
         sections_override = _split_sections_by_layout(path)
-
-    result = parse_resume_text(text, sections_override=sections_override)
-    result["used_ocr"] = _LAST_LOAD_USED_OCR
-    result["source_path"] = str(path)
-    return result
-
+    return parse_resume_text(text, sections_override=sections_override)
 
 # =========================
 # dev cli
@@ -968,17 +751,9 @@ def parse_resume_file(path: str | Path) -> Dict:
 if __name__ == "__main__":
     import json
     import argparse
-
     ap = argparse.ArgumentParser()
     ap.add_argument("input", help="path to resume file (pdf/docx/txt)")
     ap.add_argument("--pretty", action="store_true")
     args = ap.parse_args()
-
     data = parse_resume_file(args.input)
-    print(
-        json.dumps(
-            data,
-            indent=2 if args.pretty else None,
-            ensure_ascii=False,
-        )
-    )
+    print(json.dumps(data, indent=2 if args.pretty else None, ensure_ascii=False))
