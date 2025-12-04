@@ -385,11 +385,28 @@ async def recommend_jobs_endpoint(request: RecommendJobsRequest):
 
 @app.post("/api/pipeline/run")
 async def run_pipeline_endpoint(
-    request: PipelineRequest,
-    resume_file: UploadFile = File(..., description="Resume file to process")
+    # frontend에서 query string 으로 보내는 값들
+    job_count: int = Query(
+        50, ge=1, le=200, description="Number of jobs to fetch"
+    ),
+    jobs_file: str = Query(
+        "jobs.json", description="Output file for jobs"
+    ),
+    mongo_url: str = Query(
+        "mongodb://localhost:27017",
+        description="MongoDB connection URL"
+    ),
+    generate_first_cover_letter: bool = Query(
+        True,
+        description="Generate cover letter for first job"
+    ),
+    # FormData 로 오는 파일 (❗필수지만, 422 막기 위해 Optional 로 받음)
+    resume_file: UploadFile | None = File(
+        None, description="Resume file to process (FormData key: 'resume_file')"
+    ),
 ):
     """Execute the complete job application pipeline.
-    
+
     This endpoint orchestrates:
     1. Fetch jobs from API
     2. Parse uploaded resume
@@ -397,33 +414,48 @@ async def run_pipeline_endpoint(
     4. (Optional) Generate cover letter for best match
     """
     logger.info("Starting complete pipeline")
-    
+
+    # 우리가 직접 validate 해서 400 에러로 반환 (FastAPI 422 방지)
+    if resume_file is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing file: please send the resume as FormData with field name 'resume_file'.",
+        )
+
+    # Query 파라미터들로 PipelineRequest 인스턴스 생성 (기존 로직 재사용)
+    request = PipelineRequest(
+        job_count=job_count,
+        jobs_file=jobs_file,
+        mongo_url=mongo_url,
+        generate_first_cover_letter=generate_first_cover_letter,
+    )
+
     # Create temp directory
     temp_dir = Path("temp")
     temp_dir.mkdir(exist_ok=True)
     resume_path = temp_dir / resume_file.filename
-    
+
     try:
         # Save uploaded resume
         content = await resume_file.read()
         resume_path.write_bytes(content)
-        
+
         results = {"status": "running", "stages": {}}
-        
+
         # Stage 1: Fetch jobs
         logger.info("Stage 1: Fetching jobs")
         try:
             jobs = fetch_jobs(count=request.job_count, out_path=request.jobs_file)
             results["stages"]["fetch"] = {
                 "status": "success",
-                "count": len(jobs)
+                "count": len(jobs),
             }
         except Exception as e:
             logger.exception(f"Fetch failed: {e}")
             results["stages"]["fetch"] = {"status": "error", "error": str(e)}
             results["status"] = "failed_at_fetch"
             return JSONResponse(content=results, status_code=500)
-        
+
         # Stage 2: Parse resume
         logger.info("Stage 2: Parsing resume")
         try:
@@ -431,14 +463,14 @@ async def run_pipeline_endpoint(
             results["stages"]["parse"] = {
                 "status": "success",
                 "name": parsed_resume.get("name"),
-                "skills_count": len(parsed_resume.get("skills", []))
+                "skills_count": len(parsed_resume.get("skills", [])),
             }
         except Exception as e:
             logger.exception(f"Parse failed: {e}")
             results["stages"]["parse"] = {"status": "error", "error": str(e)}
             results["status"] = "failed_at_parse"
             return JSONResponse(content=results, status_code=500)
-        
+
         # Stage 3: Recommend jobs
         logger.info("Stage 3: Recommending jobs")
         try:
@@ -447,17 +479,17 @@ async def run_pipeline_endpoint(
                 jobs,
                 top_k=10,
                 min_similarity=0.25,
-                filter_senior_for_grads=True
+                filter_senior_for_grads=True,
             )
             results["stages"]["recommend"] = {
                 "status": "success",
                 "count": len(recommendations),
-                "top_jobs": recommendations[:5]  # Include top 5 in results
+                "top_jobs": recommendations[:5],  # Include top 5 in results
             }
         except Exception as e:
             logger.exception(f"Recommendation failed: {e}")
             results["stages"]["recommend"] = {"status": "error", "error": str(e)}
-        
+
         # Stage 4: Generate cover letter for best match
         if request.generate_first_cover_letter and recommendations:
             logger.info("Stage 4: Generating cover letter")
@@ -469,16 +501,19 @@ async def run_pipeline_endpoint(
                     "job_title": best_job.get("jobTitle") or best_job.get("title"),
                     "company": best_job.get("companyName") or best_job.get("company"),
                     "similarity": best_job.get("similarity"),
-                    "letter": cover_letter
+                    "letter": cover_letter,
                 }
             except Exception as e:
                 logger.exception(f"Cover letter generation failed: {e}")
-                results["stages"]["cover_letter"] = {"status": "error", "error": str(e)}
-        
+                results["stages"]["cover_letter"] = {
+                    "status": "error",
+                    "error": str(e),
+                }
+
         results["status"] = "success"
         logger.info("Pipeline completed successfully")
         return results
-        
+
     except Exception as e:
         logger.exception(f"Pipeline failed: {e}")
         raise HTTPException(status_code=500, detail=f"Pipeline failed: {str(e)}")
@@ -486,6 +521,8 @@ async def run_pipeline_endpoint(
         # Cleanup
         if resume_path.exists():
             resume_path.unlink()
+
+
 
 
 # =============================================================================
