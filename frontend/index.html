@@ -324,6 +324,11 @@
     <script>
         const API_BASE = 'http://localhost:8000';
 
+        let pipelineContext = {
+            parsedResume: null,
+            topJobs: []   // data.stages.recommend.top_jobs
+        };
+
         function switchTab(tabName) {
             // Update tab buttons
             document.querySelectorAll('.tab').forEach(tab => {
@@ -452,7 +457,7 @@
             }
         }
 
-        async function runPipeline() {
+                async function runPipeline() {
             const fileInput = document.getElementById('pipe-resume-file');
             const jobCount = document.getElementById('pipe-job-count').value;
             const resultsDiv = document.getElementById('pipe-results');
@@ -484,9 +489,14 @@
                 const data = await response.json();
 
                 if (response.ok && data.status === 'success') {
+                    // ✅ 파이프라인 컨텍스트 저장 (나중에 카드 클릭 시 사용)
+                    pipelineContext.parsedResume = data.parsed_resume || null;
+                    pipelineContext.topJobs =
+                        (data.stages && data.stages.recommend && data.stages.recommend.top_jobs) || [];
+
                     let html = '<div class="success"><h3>✓ Pipeline Completed Successfully</h3></div>';
 
-                    // Show fetch results
+                    // 1. Fetch results
                     if (data.stages.fetch) {
                         html += `<div class="result-item">
                             <h3>1. Jobs Fetched</h3>
@@ -494,7 +504,7 @@
                         </div>`;
                     }
 
-                    // Show parse results
+                    // 2. Parse results
                     if (data.stages.parse) {
                         html += `<div class="result-item">
                             <h3>2. Resume Parsed</h3>
@@ -503,23 +513,26 @@
                         </div>`;
                     }
 
-                    // Show recommendations
+                    // 3. Recommendations (카드 클릭 가능하게 변경)
                     if (data.stages.recommend && data.stages.recommend.top_jobs) {
                         html += `<div class="result-item">
                             <h3>3. Top Job Recommendations</h3>`;
-                        
-                        data.stages.recommend.top_jobs.forEach(job => {
+
+                        data.stages.recommend.top_jobs.forEach((job, index) => {
                             const title = job.jobTitle || job.title || 'Unknown';
                             const company = job.companyName || job.company || 'Unknown';
                             const location = job.jobGeo || job.location || 'Unknown';
                             const similarity = (job.similarity * 100).toFixed(1);
 
                             html += `
-                                <div class="job-card">
+                                <div class="job-card" onclick="onJobCardClick(${index})">
                                     <h3>${title}</h3>
                                     <div class="company">${company}</div>
                                     <div class="location">📍 ${location}</div>
                                     <span class="similarity">${similarity}% Match</span>
+                                    <div style="margin-top:8px; font-size:12px; color:#666;">
+                                        ▶ Click to generate a cover letter for this job
+                                    </div>
                                 </div>
                             `;
                         });
@@ -527,17 +540,20 @@
                         html += '</div>';
                     }
 
-                    // Show cover letter
-                    if (data.stages.cover_letter && data.stages.cover_letter.status === 'success') {
-                        html += `<div class="result-item">
-                            <h3>4. Cover Letter Generated</h3>
-                            <p><strong>For:</strong> ${data.stages.cover_letter.job_title} at ${data.stages.cover_letter.company}</p>
-                            <p><strong>Match Score:</strong> ${(data.stages.cover_letter.similarity * 100).toFixed(1)}%</p>
-                            <div class="cover-letter">${data.stages.cover_letter.letter}</div>
-                        </div>`;
-                    }
+                    // 4. 커버레터 섹션 (비워둔 상태로 만들어두고, 나중에 함수에서 채움)
+                    html += `<div class="result-item" id="pipe-cover-letter-section"></div>`;
 
                     resultsDiv.innerHTML = html;
+
+                    // 파이프라인이 기본으로 생성해둔 커버레터가 있으면 초기값으로 렌더
+                    if (data.stages.cover_letter && data.stages.cover_letter.status === 'success') {
+                        renderCoverLetter({
+                            job_title: data.stages.cover_letter.job_title,
+                            company: data.stages.cover_letter.company,
+                            similarity: data.stages.cover_letter.similarity,
+                            letter: data.stages.cover_letter.letter
+                        });
+                    }
                 } else {
                     resultsDiv.innerHTML = `<div class="error">Error: ${data.detail || 'Pipeline failed'}</div>`;
                 }
@@ -545,6 +561,71 @@
                 resultsDiv.innerHTML = `<div class="error">Error: ${error.message}</div>`;
             }
         }
+
+        function renderCoverLetter(info) {
+            const container = document.getElementById('pipe-cover-letter-section');
+            if (!container) return;
+
+            const similarityText =
+                info.similarity !== undefined && info.similarity !== null
+                    ? `${(info.similarity * 100).toFixed(1)}%`
+                    : null;
+
+            container.innerHTML = `
+                <h3>4. Cover Letter</h3>
+                <p><strong>For:</strong> ${info.job_title || 'Unknown'} at ${info.company || 'Unknown'}</p>
+                ${similarityText ? `<p><strong>Match Score:</strong> ${similarityText}</p>` : ''}
+                <div class="cover-letter">${info.letter || ''}</div>
+            `;
+        }
+
+        async function onJobCardClick(jobIndex) {
+            const job = pipelineContext.topJobs[jobIndex];
+            const resume = pipelineContext.parsedResume;
+
+            if (!job || !resume) {
+                alert('Please run the pipeline first.');
+                return;
+            }
+
+            const container = document.getElementById('pipe-cover-letter-section');
+            if (container) {
+                container.innerHTML = '<div class="loading">Generating cover letter for the selected job...</div>';
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/api/cover-letter/generate`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        resume_data: resume,
+                        job_data: job,
+                        model_name: 'llama3.2',
+                        temperature: 0.7
+                    })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok || data.status !== 'success') {
+                    throw new Error(data.detail || data.message || 'Failed to generate cover letter');
+                }
+
+                renderCoverLetter({
+                    job_title: data.job_title,
+                    company: data.company,
+                    similarity: job.similarity,
+                    letter: data.cover_letter
+                });
+            } catch (error) {
+                if (container) {
+                    container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+                }
+            }
+        }
+
     </script>
 </body>
 </html>
