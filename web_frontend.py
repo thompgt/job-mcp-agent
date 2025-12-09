@@ -750,7 +750,34 @@ HTML_TEMPLATE = """
             document.getElementById('modalMatchScore').innerHTML = `<div class="match-score">✨ ${similarity}% Match</div>`;
             
             const description = job.jobDescription || job.description || job.jobExcerpt || 'No description available';
-            document.getElementById('modalJobDescription').textContent = description;
+            
+            // Clean HTML tags and format job description
+            function cleanJobDescription(html) {
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = html;
+                
+                // Process elements to add spacing
+                const elements = tempDiv.querySelectorAll('*');
+                elements.forEach(el => {
+                    if (['P', 'DIV', 'BR', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(el.tagName)) {
+                        el.after(document.createTextNode('\\n\\n'));
+                    } else if (el.tagName === 'LI') {
+                        el.before(document.createTextNode('• '));
+                        el.after(document.createTextNode('\\n'));
+                    }
+                });
+                
+                let text = tempDiv.textContent || tempDiv.innerText || '';
+                
+                // Clean up excessive whitespace
+                text = text.replace(/\\n{3,}/g, '\\n\\n'); // Max 2 newlines
+                text = text.replace(/[ \\t]+/g, ' '); // Single spaces
+                text = text.trim();
+                
+                return text;
+            }
+            
+            document.getElementById('modalJobDescription').textContent = cleanJobDescription(description);
             
             // Reset cover letter section
             document.getElementById('coverLetterSection').classList.add('hidden');
