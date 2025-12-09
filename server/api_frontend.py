@@ -1,586 +1,704 @@
-"""FastAPI Frontend for Job Application MCP Server
-
-This FastAPI application provides REST API endpoints to interact with the
-MCP job application pipeline server. It exposes web-friendly endpoints for:
-- Fetching and storing jobs
-- Parsing resumes
-- Generating cover letters
-- Running the complete pipeline
-- Job recommendations
-
-Run with: uvicorn server.api_frontend:app --host 0.0.0.0 --port 8000
-"""
-from __future__ import annotations
-
-import sys
-from pathlib import Path
-from typing import Optional, Dict, Any, List
-import json
-import logging
-from rouge_score import rouge_scorer
-from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-
-
-# Add project root to path
-project_root = Path(__file__).resolve().parents[1]
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
-
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
-from fastapi.responses import JSONResponse, FileResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-import uvicorn
-
-# Local imports
-from get_data import fetch_jobs
-from server.app.services.resume_parser import parse_resume_file
-from server.app.services.cover_letter_generator import generate_cover_letter
-from server.app.services.matching_engine import rank_jobs_for_resume
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-)
-logger = logging.getLogger(__name__)
-
-# Initialize FastAPI app
-app = FastAPI(
-    title="Job Application Pipeline API",
-    description="REST API for job searching, resume parsing, and cover letter generation",
-    version="1.0.0"
-)
-
-# CORS middleware for frontend access
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-# =============================================================================
-# Request/Response Models
-# =============================================================================
-
-class FetchJobsRequest(BaseModel):
-    count: int = Field(100, ge=1, le=500, description="Number of jobs to fetch")
-    out_path: str = Field("jobs.json", description="Output file path")
-
-
-class FetchJobsResponse(BaseModel):
-    status: str
-    fetched: int
-    out_path: str
-    message: str
-
-
-class ParseResumeResponse(BaseModel):
-    status: str
-    name: Optional[str] = None
-    skills: List[str] = []
-    experience_count: int = 0
-    education_count: int = 0
-    message: str
-
-
-class GenerateCoverLetterRequest(BaseModel):
-    resume_data: Dict[str, Any] = Field(..., description="Parsed resume data")
-    job_data: Dict[str, Any] = Field(..., description="Job posting data")
-    model_name: str = Field("llama3.2", description="LLM model name")
-    temperature: float = Field(0.7, ge=0.0, le=2.0, description="Generation temperature")
-    reference_letter: Optional[str] = Field(
-        None,
-        description="Optional reference cover letter for evaluation (BLEU/ROUGE)."
-    )
-
-
-class GenerateCoverLetterResponse(BaseModel):
-    status: str
-    cover_letter: Optional[str] = None
-    job_title: Optional[str] = None
-    company: Optional[str] = None
-    message: str
-    bleu: Optional[float] = None
-    rouge1: Optional[float] = None
-    rougeL: Optional[float] = None
-    message: str
-
-
-class RecommendJobsRequest(BaseModel):
-    resume_data: Dict[str, Any] = Field(..., description="Parsed resume data")
-    jobs_file: str = Field("jobs.json", description="Path to jobs JSON file")
-    top_k: int = Field(10, ge=1, le=50, description="Number of recommendations")
-    min_similarity: float = Field(0.25, ge=0.0, le=1.0, description="Minimum similarity threshold")
-    filter_senior: bool = Field(True, description="Filter senior roles for junior candidates")
-
-
-class RecommendJobsResponse(BaseModel):
-    status: str
-    recommendations: List[Dict[str, Any]] = []
-    count: int
-    message: str
-
-
-class PipelineRequest(BaseModel):
-    job_count: int = Field(50, ge=1, le=200, description="Number of jobs to fetch")
-    jobs_file: str = Field("jobs.json", description="Output file for jobs")
-    mongo_url: str = Field("mongodb://localhost:27017", description="MongoDB connection URL")
-    generate_first_cover_letter: bool = Field(True, description="Generate cover letter for first job")
-
-
-# =============================================================================
-# API Endpoints
-# =============================================================================
-
-@app.get("/")
-async def root():
-    """Health check and API information."""
-    return {
-        "service": "Job Application Pipeline API",
-        "version": "1.0.0",
-        "status": "running",
-        "endpoints": {
-            "fetch_jobs": "/api/jobs/fetch",
-            "parse_resume": "/api/resume/parse",
-            "generate_cover_letter": "/api/cover-letter/generate",
-            "recommend_jobs": "/api/jobs/recommend",
-            "complete_pipeline": "/api/pipeline/run"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Application Pipeline</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-    }
 
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy"}
-
-
-# -----------------------------------------------------------------------------
-# Job Fetching
-# -----------------------------------------------------------------------------
-
-@app.post("/api/jobs/fetch", response_model=FetchJobsResponse)
-async def fetch_jobs_endpoint(request: FetchJobsRequest):
-    """Fetch job listings from the API and save to file.
-    
-    This endpoint fetches remote job postings and stores them in a JSON file.
-    """
-    logger.info(f"Fetching {request.count} jobs to {request.out_path}")
-    
-    try:
-        jobs = fetch_jobs(count=request.count, out_path=request.out_path)
-        resolved_path = Path(request.out_path).resolve()
-        
-        return FetchJobsResponse(
-            status="success",
-            fetched=len(jobs),
-            out_path=str(resolved_path),
-            message=f"Successfully fetched {len(jobs)} jobs"
-        )
-    except Exception as e:
-        logger.exception(f"Failed to fetch jobs: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch jobs: {str(e)}")
-
-
-@app.get("/api/jobs/list")
-async def list_jobs(
-    jobs_file: str = Query("jobs.json", description="Path to jobs JSON file"),
-    limit: int = Query(50, ge=1, le=500, description="Maximum jobs to return")
-):
-    """List jobs from the stored jobs file."""
-    logger.info(f"Listing jobs from {jobs_file}")
-    
-    p = Path(jobs_file)
-    if not p.exists():
-        raise HTTPException(status_code=404, detail=f"Jobs file not found: {jobs_file}")
-    
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        
-        # Extract jobs list
-        jobs = []
-        if isinstance(data, dict):
-            for k in ("jobs", "data", "results", "items"):
-                if k in data and isinstance(data[k], list):
-                    jobs = data[k]
-                    break
-        elif isinstance(data, list):
-            jobs = data
-        
-        return {
-            "status": "success",
-            "total": len(jobs),
-            "returned": min(len(jobs), limit),
-            "jobs": jobs[:limit]
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
         }
-    except Exception as e:
-        logger.exception(f"Failed to list jobs: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list jobs: {str(e)}")
 
-
-# -----------------------------------------------------------------------------
-# Resume Parsing
-# -----------------------------------------------------------------------------
-
-@app.post("/api/resume/parse", response_model=ParseResumeResponse)
-async def parse_resume_endpoint(
-    file: UploadFile = File(..., description="Resume file (PDF, DOCX, or TXT)")
-):
-    """Parse an uploaded resume file.
-    
-    Accepts PDF, DOCX, or TXT files and extracts structured information
-    including name, skills, experience, education, and projects.
-    """
-    logger.info(f"Parsing resume: {file.filename}")
-    
-    # Save uploaded file temporarily
-    temp_dir = Path("temp")
-    temp_dir.mkdir(exist_ok=True)
-    
-    temp_path = temp_dir / file.filename
-    try:
-        # Write uploaded file
-        content = await file.read()
-        temp_path.write_bytes(content)
-        
-        # Parse resume
-        parsed = parse_resume_file(temp_path)
-        
-        return ParseResumeResponse(
-            status="success",
-            name=parsed.get("name"),
-            skills=parsed.get("skills", []),
-            experience_count=len(parsed.get("experience", [])),
-            education_count=len(parsed.get("education", [])),
-            message=f"Successfully parsed resume for {parsed.get('name', 'Unknown')}"
-        )
-    except Exception as e:
-        logger.exception(f"Failed to parse resume: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to parse resume: {str(e)}")
-    finally:
-        # Cleanup temp file
-        if temp_path.exists():
-            temp_path.unlink()
-
-
-@app.post("/api/resume/parse-path")
-async def parse_resume_path_endpoint(resume_path: str = Form(...)):
-    """Parse a resume from a file path on the server.
-    
-    This is useful when the resume is already stored on the server.
-    """
-    logger.info(f"Parsing resume from path: {resume_path}")
-    
-    p = Path(resume_path)
-    if not p.exists():
-        raise HTTPException(status_code=404, detail=f"Resume file not found: {resume_path}")
-    
-    try:
-        parsed = parse_resume_file(p)
-        
-        return {
-            "status": "success",
-            "parsed": parsed,
-            "message": f"Successfully parsed resume for {parsed.get('name', 'Unknown')}"
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
         }
-    except Exception as e:
-        logger.exception(f"Failed to parse resume: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to parse resume: {str(e)}")
 
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
 
-# -----------------------------------------------------------------------------
-# Cover Letter Generation
-# -----------------------------------------------------------------------------
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
 
-@app.post("/api/cover-letter/generate", response_model=GenerateCoverLetterResponse)
-async def generate_cover_letter_endpoint(request: GenerateCoverLetterRequest):
-    """Generate a personalized cover letter.
-    
-    Takes parsed resume data and job posting data to create a tailored
-    cover letter using an LLM (Ollama).
-    """
-    job_title = request.job_data.get("title") or request.job_data.get("jobTitle") or "Unknown"
-    company = request.job_data.get("company") or request.job_data.get("companyName") or "Unknown"
-    
-    logger.info(f"Generating cover letter for {job_title} at {company}")
-    
-    try:
-            letter = generate_cover_letter(
-            request.resume_data,
-            request.job_data,
-            model_name=request.model_name,
-            temperature=request.temperature
-        )
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
 
-        bleu_score = None
-        rouge1 = None
-        rougeL = None
+        .tabs {
+            display: flex;
+            background: #f8f9fa;
+            border-bottom: 2px solid #dee2e6;
+        }
 
-        # ✅ reference_letter 가 들어온 경우에만 평가
-        if request.reference_letter:
-            ref = request.reference_letter.strip()
-            hyp = letter.strip()
+        .tab {
+            flex: 1;
+            padding: 15px;
+            text-align: center;
+            cursor: pointer;
+            background: transparent;
+            border: none;
+            font-size: 1em;
+            font-weight: 600;
+            color: #495057;
+            transition: all 0.3s;
+        }
 
-            # BLEU (문장 단위)
-            smoothie = SmoothingFunction().method4
-            bleu_score = float(
-                sentence_bleu(
-                    [ref.split()],
-                    hyp.split(),
-                    smoothing_function=smoothie
-                )
-            )
+        .tab:hover {
+            background: #e9ecef;
+        }
 
-            # ROUGE-1 / ROUGE-L
-            scorer = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=True)
-            scores = scorer.score(ref, hyp)
-            rouge1 = float(scores['rouge1'].fmeasure)
-            rougeL = float(scores['rougeL'].fmeasure)
+        .tab.active {
+            background: white;
+            color: #667eea;
+            border-bottom: 3px solid #667eea;
+        }
 
-        return GenerateCoverLetterResponse(
-            status="success",
-            cover_letter=letter,
-            job_title=job_title,
-            company=company,
-            bleu=bleu_score,
-            rouge1=rouge1,
-            rougeL=rougeL,
-            message="Cover letter generated successfully"
-        )
+        .content {
+            padding: 30px;
+        }
 
-    except Exception as e:
-        logger.exception(f"Failed to generate cover letter: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to generate cover letter: {str(e)}"
-        )
+        .tab-content {
+            display: none;
+        }
 
+        .tab-content.active {
+            display: block;
+        }
 
-# -----------------------------------------------------------------------------
-# Job Recommendations
-# -----------------------------------------------------------------------------
+        .form-group {
+            margin-bottom: 20px;
+        }
 
-@app.post("/api/jobs/recommend", response_model=RecommendJobsResponse)
-async def recommend_jobs_endpoint(request: RecommendJobsRequest):
-    """Get job recommendations based on resume.
-    
-    Uses semantic similarity (sentence-transformers) to rank jobs
-    by relevance to the candidate's resume.
-    """
-    logger.info(f"Generating {request.top_k} job recommendations")
-    
-    # Load jobs
-    p = Path(request.jobs_file)
-    if not p.exists():
-        raise HTTPException(status_code=404, detail=f"Jobs file not found: {request.jobs_file}")
-    
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        
-        # Extract jobs list
-        jobs = []
-        if isinstance(data, dict):
-            for k in ("jobs", "data", "results", "items"):
-                if k in data and isinstance(data[k], list):
-                    jobs = data[k]
-                    break
-        elif isinstance(data, list):
-            jobs = data
-        
-        if not jobs:
-            raise HTTPException(status_code=404, detail="No jobs found in file")
-        
-        # Rank jobs
-        recommendations = rank_jobs_for_resume(
-            request.resume_data,
-            jobs,
-            top_k=request.top_k,
-            min_similarity=request.min_similarity,
-            filter_senior_for_grads=request.filter_senior
-        )
-        
-        return RecommendJobsResponse(
-            status="success",
-            recommendations=recommendations,
-            count=len(recommendations),
-            message=f"Found {len(recommendations)} relevant jobs"
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Failed to recommend jobs: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to recommend jobs: {str(e)}"
-        )
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
 
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #dee2e6;
+            border-radius: 6px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+        }
 
-# -----------------------------------------------------------------------------
-# Complete Pipeline
-# -----------------------------------------------------------------------------
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
 
-@app.post("/api/pipeline/run")
-async def run_pipeline_endpoint(
-    # frontend에서 query string 으로 보내는 값들
-    job_count: int = Query(
-        50, ge=1, le=200, description="Number of jobs to fetch"
-    ),
-    jobs_file: str = Query(
-        "jobs.json", description="Output file for jobs"
-    ),
-    mongo_url: str = Query(
-        "mongodb://localhost:27017",
-        description="MongoDB connection URL"
-    ),
-    generate_first_cover_letter: bool = Query(
-        True,
-        description="Generate cover letter for first job"
-    ),
-    # FormData 로 오는 파일 (❗필수지만, 422 막기 위해 Optional 로 받음)
-    resume_file: UploadFile | None = File(
-        None, description="Resume file to process (FormData key: 'resume_file')"
-    ),
-):
-    """Execute the complete job application pipeline.
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 6px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
 
-    This endpoint orchestrates:
-    1. Fetch jobs from API
-    2. Parse uploaded resume
-    3. Recommend top jobs
-    4. (Optional) Generate cover letter for best match
-    """
-    logger.info("Starting complete pipeline")
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
 
-    # 우리가 직접 validate 해서 400 에러로 반환 (FastAPI 422 방지)
-    if resume_file is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Missing file: please send the resume as FormData with field name 'resume_file'.",
-        )
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
 
-    # Query 파라미터들로 PipelineRequest 인스턴스 생성 (기존 로직 재사용)
-    request = PipelineRequest(
-        job_count=job_count,
-        jobs_file=jobs_file,
-        mongo_url=mongo_url,
-        generate_first_cover_letter=generate_first_cover_letter,
-    )
+        .results {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            display: none;
+        }
 
-    # Create temp directory
-    temp_dir = Path("temp")
-    temp_dir.mkdir(exist_ok=True)
-    resume_path = temp_dir / resume_file.filename
+        .results.show {
+            display: block;
+        }
 
-    try:
-        # Save uploaded resume
-        content = await resume_file.read()
-        resume_path.write_bytes(content)
+        .result-item {
+            background: white;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #667eea;
+        }
 
-        results = {"status": "running", "stages": {}}
+        .result-item h3 {
+            color: #333;
+            margin-bottom: 8px;
+        }
 
-        # Stage 1: Fetch jobs
-        logger.info("Stage 1: Fetching jobs")
-        try:
-            jobs = fetch_jobs(count=request.job_count, out_path=request.jobs_file)
-            results["stages"]["fetch"] = {
-                "status": "success",
-                "count": len(jobs),
-            }
-        except Exception as e:
-            logger.exception(f"Fetch failed: {e}")
-            results["stages"]["fetch"] = {"status": "error", "error": str(e)}
-            results["status"] = "failed_at_fetch"
-            return JSONResponse(content=results, status_code=500)
+        .result-item p {
+            color: #666;
+            line-height: 1.6;
+        }
 
-        # Stage 2: Parse resume
-        logger.info("Stage 2: Parsing resume")
-        try:
-            parsed_resume = parse_resume_file(resume_path)
-            results["stages"]["parse"] = {
-                "status": "success",
-                "name": parsed_resume.get("name"),
-                "skills_count": len(parsed_resume.get("skills", [])),
-            }
+        .job-card {
+            background: white;
+            padding: 20px;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
 
-            results["parsed_resume"] = parsed_resume
+        .job-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
 
-        except Exception as e:
-            logger.exception(f"Parse failed: {e}")
-            results["stages"]["parse"] = {"status": "error", "error": str(e)}
-            results["status"] = "failed_at_parse"
-            return JSONResponse(content=results, status_code=500)
+        .job-card h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
 
-        # Stage 3: Recommend jobs
-        logger.info("Stage 3: Recommending jobs")
-        try:
-            recommendations = rank_jobs_for_resume(
-                parsed_resume,
-                jobs,
-                top_k=10,
-                min_similarity=0.25,
-                filter_senior_for_grads=True,
-            )
-            results["stages"]["recommend"] = {
-                "status": "success",
-                "count": len(recommendations),
-                "top_jobs": recommendations[:5],  # Include top 5 in results
-            }
+        .job-card .company {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 5px;
+        }
 
-            results["recommendations"] = recommendations
-            
-        except Exception as e:
-            logger.exception(f"Recommendation failed: {e}")
-            results["stages"]["recommend"] = {"status": "error", "error": str(e)}
+        .job-card .location {
+            color: #666;
+            margin-bottom: 10px;
+        }
 
-        # Stage 4: Generate cover letter for best match
-        if request.generate_first_cover_letter and recommendations:
-            logger.info("Stage 4: Generating cover letter")
-            try:
-                best_job = recommendations[0]
-                cover_letter = generate_cover_letter(parsed_resume, best_job)
-                results["stages"]["cover_letter"] = {
-                    "status": "success",
-                    "job_title": best_job.get("jobTitle") or best_job.get("title"),
-                    "company": best_job.get("companyName") or best_job.get("company"),
-                    "similarity": best_job.get("similarity"),
-                    "letter": cover_letter,
+        .job-card .similarity {
+            display: inline-block;
+            padding: 5px 15px;
+            background: #667eea;
+            color: white;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: 600;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #667eea;
+            font-weight: 600;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 20px;
+        }
+
+        .success {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 20px;
+        }
+
+        .cover-letter {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            white-space: pre-wrap;
+            line-height: 1.8;
+            font-size: 1.05em;
+        }
+
+        .metrics {
+            margin: 10px 0 15px 0;
+            padding: 10px 15px;
+            background: #eef4ff;
+            border-radius: 6px;
+            font-size: 0.95em;
+        }
+
+        .metrics ul {
+            margin-left: 18px;
+        }
+
+        .metrics li {
+            margin-bottom: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Job Application Pipeline</h1>
+            <p>AI-powered job search, resume parsing, and cover letter generation</p>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('fetch')">Fetch Jobs</button>
+            <button class="tab" onclick="switchTab('parse')">Parse Resume</button>
+            <button class="tab" onclick="switchTab('recommend')">Recommendations</button>
+            <button class="tab" onclick="switchTab('pipeline')">Complete Pipeline</button>
+            <button class="tab" onclick="switchTab('eval')">Evaluate Letters</button>
+        </div>
+
+        <div class="content">
+            <!-- Fetch Jobs Tab -->
+            <div id="fetch" class="tab-content active">
+                <h2>Fetch Job Listings</h2>
+                <div class="form-group">
+                    <label for="job-count">Number of Jobs:</label>
+                    <input type="number" id="job-count" value="50" min="1" max="200">
+                </div>
+                <div class="form-group">
+                    <label for="jobs-file">Output File:</label>
+                    <input type="text" id="jobs-file" value="jobs.json">
+                </div>
+                <button class="btn" onclick="fetchJobs()">Fetch Jobs</button>
+                <div id="fetch-results" class="results"></div>
+            </div>
+
+            <!-- Parse Resume Tab -->
+            <div id="parse" class="tab-content">
+                <h2>Parse Resume</h2>
+                <div class="form-group">
+                    <label for="resume-file">Upload Resume (PDF, DOCX, or TXT):</label>
+                    <input type="file" id="resume-file" accept=".pdf,.docx,.txt">
+                </div>
+                <button class="btn" onclick="parseResume()">Parse Resume</button>
+                <div id="parse-results" class="results"></div>
+            </div>
+
+            <!-- Recommendations Tab -->
+            <div id="recommend" class="tab-content">
+                <h2>Job Recommendations</h2>
+                <p style="margin-bottom: 20px; color: #666;">
+                    Upload a resume and get AI-powered job recommendations based on semantic similarity.
+                </p>
+                <div class="form-group">
+                    <label for="rec-resume-file">Upload Resume:</label>
+                    <input type="file" id="rec-resume-file" accept=".pdf,.docx,.txt">
+                </div>
+                <div class="form-group">
+                    <label for="rec-jobs-file">Jobs File:</label>
+                    <input type="text" id="rec-jobs-file" value="jobs.json">
+                </div>
+                <div class="form-group">
+                    <label for="rec-top-k">Number of Recommendations:</label>
+                    <input type="number" id="rec-top-k" value="10" min="1" max="50">
+                </div>
+                <button class="btn" onclick="getRecommendations()">Get Recommendations</button>
+                <div id="rec-results" class="results"></div>
+            </div>
+
+            <!-- Complete Pipeline Tab -->
+            <div id="pipeline" class="tab-content">
+                <h2>Complete Pipeline</h2>
+                <p style="margin-bottom: 20px; color: #666;">
+                    Run the complete pipeline: fetch jobs, parse resume, get recommendations, and generate a cover letter.
+                </p>
+                <div class="form-group">
+                    <label for="pipe-resume-file">Upload Resume:</label>
+                    <input type="file" id="pipe-resume-file" accept=".pdf,.docx,.txt">
+                </div>
+                <div class="form-group">
+                    <label for="pipe-job-count">Number of Jobs to Fetch:</label>
+                    <input type="number" id="pipe-job-count" value="50" min="1" max="200">
+                </div>
+                <button class="btn" onclick="runPipeline()">Run Complete Pipeline</button>
+                <div id="pipe-results" class="results"></div>
+            </div>
+
+            <!-- Evaluate Letters Tab (NEW) -->
+            <div id="eval" class="tab-content">
+                <h2>Evaluate Cover Letters</h2>
+                <p style="margin-bottom: 20px; color: #666;">
+                    Upload your cover letter and a reference cover letter. The system will compute BLEU and ROUGE scores.
+                </p>
+                <div class="form-group">
+                    <label for="eval-candidate-file">Your Cover Letter (candidate):</label>
+                    <input type="file" id="eval-candidate-file" accept=".txt, .pdf, .docx">
+                </div>
+                <div class="form-group">
+                    <label for="eval-reference-file">Reference Cover Letter:</label>
+                    <input type="file" id="eval-reference-file" accept=".txt, .pdf, .docx">
+                </div>
+                <button class="btn" onclick="evalCoverLetters()">Evaluate Letters</button>
+                <div id="eval-results" class="results"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+
+        let pipelineContext = {
+            parsedResume: null,
+            topJobs: []   // data.stages.recommend.top_jobs
+        };
+
+        function switchTab(tabName) {
+            // Update tab buttons
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            // Update tab content
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.getElementById(tabName).classList.add('active');
+        }
+
+        async function fetchJobs() {
+            const count = document.getElementById('job-count').value;
+            const outPath = document.getElementById('jobs-file').value;
+            const resultsDiv = document.getElementById('fetch-results');
+
+            resultsDiv.innerHTML = '<div class="loading">Fetching jobs...</div>';
+            resultsDiv.classList.add('show');
+
+            try {
+                const response = await fetch(`${API_BASE}/api/jobs/fetch`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ count: parseInt(count), out_path: outPath })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    resultsDiv.innerHTML = `
+                        <div class="success">
+                            <h3>✓ Jobs Fetched Successfully</h3>
+                            <p>Fetched ${data.fetched} jobs</p>
+                            <p>Saved to: ${data.out_path}</p>
+                        </div>
+                    `;
+                } else {
+                    resultsDiv.innerHTML = `<div class="error">Error: ${data.detail}</div>`;
                 }
-            except Exception as e:
-                logger.exception(f"Cover letter generation failed: {e}")
-                results["stages"]["cover_letter"] = {
-                    "status": "error",
-                    "error": str(e),
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+            }
+        }
+
+        async function parseResume() {
+            const fileInput = document.getElementById('resume-file');
+            const resultsDiv = document.getElementById('parse-results');
+
+            if (!fileInput.files[0]) {
+                alert('Please select a resume file');
+                return;
+            }
+
+            resultsDiv.innerHTML = '<div class="loading">Parsing resume...</div>';
+            resultsDiv.classList.add('show');
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            try {
+                const response = await fetch(`${API_BASE}/api/resume/parse`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    resultsDiv.innerHTML = `
+                        <div class="success">
+                            <h3>✓ Resume Parsed Successfully</h3>
+                            <p><strong>Name:</strong> ${data.name || 'Not found'}</p>
+                            <p><strong>Skills Found:</strong> ${data.skills.length}</p>
+                            <p><strong>Experience Entries:</strong> ${data.experience_count}</p>
+                            <p><strong>Education Entries:</strong> ${data.education_count}</p>
+                            ${data.skills.length > 0 ? `<p><strong>Skills:</strong> ${data.skills.join(', ')}</p>` : ''}
+                        </div>
+                    `;
+                } else {
+                    resultsDiv.innerHTML = `<div class="error">Error: ${data.detail}</div>`;
+                }
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+            }
+        }
+
+        async function getRecommendations() {
+            const fileInput = document.getElementById('rec-resume-file');
+            const jobsFile = document.getElementById('rec-jobs-file').value;
+            const topK = document.getElementById('rec-top-k').value;
+            const resultsDiv = document.getElementById('rec-results');
+
+            if (!fileInput.files[0]) {
+                alert('Please select a resume file');
+                return;
+            }
+
+            resultsDiv.innerHTML = '<div class="loading">Analyzing resume and generating recommendations...</div>';
+            resultsDiv.classList.add('show');
+
+            try {
+                resultsDiv.innerHTML = '<div class="error">Please use the Complete Pipeline tab for full recommendations with uploaded files.</div>';
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+            }
+        }
+
+        async function runPipeline() {
+            const fileInput = document.getElementById('pipe-resume-file');
+            const jobCount = document.getElementById('pipe-job-count').value;
+            const resultsDiv = document.getElementById('pipe-results');
+
+            if (!fileInput.files[0]) {
+                alert('Please select a resume file');
+                return;
+            }
+
+            resultsDiv.innerHTML = '<div class="loading">Running complete pipeline... This may take a minute.</div>';
+            resultsDiv.classList.add('show');
+
+            const formData = new FormData();
+            formData.append('resume_file', fileInput.files[0]);
+
+            const params = new URLSearchParams({
+                job_count: jobCount,
+                jobs_file: 'jobs.json',
+                mongo_url: 'mongodb://localhost:27017',
+                generate_first_cover_letter: 'true'
+            });
+
+            try {
+                const response = await fetch(`${API_BASE}/api/pipeline/run?${params}`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.status === 'success') {
+                    // pipeline context save
+                    pipelineContext.parsedResume = data.parsed_resume || null;
+                    pipelineContext.topJobs =
+                        (data.stages && data.stages.recommend && data.stages.recommend.top_jobs) || [];
+
+                    let html = '<div class="success"><h3>✓ Pipeline Completed Successfully</h3></div>';
+
+                    // 1. Fetch results
+                    if (data.stages.fetch) {
+                        html += `<div class="result-item">
+                            <h3>1. Jobs Fetched</h3>
+                            <p>Fetched ${data.stages.fetch.count} jobs from API</p>
+                        </div>`;
+                    }
+
+                    // 2. Parse results
+                    if (data.stages.parse) {
+                        html += `<div class="result-item">
+                            <h3>2. Resume Parsed</h3>
+                            <p><strong>Candidate:</strong> ${data.stages.parse.name}</p>
+                            <p><strong>Skills:</strong> ${data.stages.parse.skills_count}</p>
+                        </div>`;
+                    }
+
+                    // 3. Recommendations 
+                    if (data.stages.recommend && data.stages.recommend.top_jobs) {
+                        html += `<div class="result-item">
+                            <h3>3. Top Job Recommendations</h3>`;
+
+                        data.stages.recommend.top_jobs.forEach((job, index) => {
+                            const title = job.jobTitle || job.title || 'Unknown';
+                            const company = job.companyName || job.company || 'Unknown';
+                            const location = job.jobGeo || job.location || 'Unknown';
+                            const similarity = (job.similarity * 100).toFixed(1);
+
+                            html += `
+                                <div class="job-card" onclick="onJobCardClick(${index})">
+                                    <h3>${title}</h3>
+                                    <div class="company">${company}</div>
+                                    <div class="location">📍 ${location}</div>
+                                    <span class="similarity">${similarity}% Match</span>
+                                    <div style="margin-top:8px; font-size:12px; color:#666;">
+                                        ▶ Click to generate a cover letter for this job
+                                    </div>
+                                </div>
+                            `;
+                        });
+
+                        html += '</div>';
+                    }
+
+                    // 4. cover letter section placeholder
+                    html += `<div class="result-item" id="pipe-cover-letter-section"></div>`;
+
+                    resultsDiv.innerHTML = html;
+
+                    // If the pipeline has a default generated cover letter, render it as the initial value
+                    if (data.stages.cover_letter && data.stages.cover_letter.status === 'success') {
+                        renderCoverLetter({
+                            job_title: data.stages.cover_letter.job_title,
+                            company: data.stages.cover_letter.company,
+                            similarity: data.stages.cover_letter.similarity,
+                            letter: data.stages.cover_letter.letter
+                        });
+                    }
+                } else {
+                    resultsDiv.innerHTML = `<div class="error">Error: ${data.detail || 'Pipeline failed'}</div>`;
+                }
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+            }
+        }
+
+        function renderCoverLetter(info) {
+            const container = document.getElementById('pipe-cover-letter-section');
+            if (!container) return;
+
+            const similarityText =
+                info.similarity !== undefined && info.similarity !== null
+                    ? `${(info.similarity * 100).toFixed(1)}%`
+                    : null;
+
+            container.innerHTML = `
+                <h3>4. Cover Letter</h3>
+                <p><strong>For:</strong> ${info.job_title || 'Unknown'} at ${info.company || 'Unknown'}</p>
+                ${similarityText ? `<p><strong>Match Score:</strong> ${similarityText}</p>` : ''}
+                <div class="cover-letter">${info.letter || ''}</div>
+            `;
+        }
+
+        async function onJobCardClick(jobIndex) {
+            const job = pipelineContext.topJobs[jobIndex];
+            const resume = pipelineContext.parsedResume;
+
+            if (!job || !resume) {
+                alert('Please run the pipeline first.');
+                return;
+            }
+
+            const container = document.getElementById('pipe-cover-letter-section');
+            if (container) {
+                container.innerHTML = '<div class="loading">Generating cover letter for the selected job...</div>';
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/api/cover-letter/generate`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        resume_data: resume,
+                        job_data: job,
+                        model_name: 'llama3.2',
+                        temperature: 0.7
+                    })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok || data.status !== 'success') {
+                    throw new Error(data.detail || data.message || 'Failed to generate cover letter');
                 }
 
-        results["status"] = "success"
-        logger.info("Pipeline completed successfully")
-        return results
+                renderCoverLetter({
+                    job_title: data.job_title,
+                    company: data.company,
+                    similarity: job.similarity,
+                    letter: data.cover_letter
+                });
+            } catch (error) {
+                if (container) {
+                    container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+                }
+            }
+        }
 
-    except Exception as e:
-        logger.exception(f"Pipeline failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Pipeline failed: {str(e)}")
-    finally:
-        # Cleanup
-        if resume_path.exists():
-            resume_path.unlink()
+        // NEW: Evaluate Letters (two files -> BLEU/ROUGE)
+        async function evalCoverLetters() {
+            const candInput = document.getElementById('eval-candidate-file');
+            const refInput = document.getElementById('eval-reference-file');
+            const resultsDiv = document.getElementById('eval-results');
 
+            if (!candInput.files[0] || !refInput.files[0]) {
+                alert('Please select both candidate and reference files');
+                return;
+            }
 
+            resultsDiv.innerHTML = '<div class="loading">Evaluating cover letters...</div>';
+            resultsDiv.classList.add('show');
 
+            const formData = new FormData();
+            formData.append('candidate_file', candInput.files[0]);
+            formData.append('reference_file', refInput.files[0]);
 
-# =============================================================================
-# Run Server
-# =============================================================================
+            try {
+                const response = await fetch(`${API_BASE}/api/cover-letter/eval`, {
+                    method: 'POST',
+                    body: formData
+                });
 
-if __name__ == "__main__":
-    logger.info("Starting FastAPI server on http://0.0.0.0:8000")
-    uvicorn.run(
-        "server.api_frontend:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
+                const data = await response.json();
+
+                if (!response.ok || data.status !== 'success') {
+                    throw new Error(data.detail || data.message || 'Evaluation failed');
+                }
+
+                const bleu = (data.bleu * 100).toFixed(1);
+                const rouge1 = (data.rouge1 * 100).toFixed(1);
+                const rougeL = (data.rougeL * 100).toFixed(1);
+
+                resultsDiv.innerHTML = `
+                    <div class="success">
+                        <h3>✓ Evaluation Completed</h3>
+                        <div class="metrics">
+                            <h4>Metrics</h4>
+                            <ul>
+                                <li><strong>BLEU:</strong> ${bleu}%</li>
+                                <li><strong>ROUGE-1 F1:</strong> ${rouge1}%</li>
+                                <li><strong>ROUGE-L F1:</strong> ${rougeL}%</li>
+                            </ul>
+                        </div>
+                        <p>You can adjust your cover letter and re-upload to compare scores.</p>
+                    </div>
+                `;
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+            }
+        }
+
+    </script>
+</body>
+</html>
+

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Career Craft Agent</title>
+    <title>Job Application Pipeline</title>
     <style>
         * {
             margin: 0;
@@ -97,7 +97,8 @@
         }
 
         .form-group input,
-        .form-group select {
+        .form-group select,
+        .form-group textarea {
             width: 100%;
             padding: 12px;
             border: 2px solid #dee2e6;
@@ -107,7 +108,8 @@
         }
 
         .form-group input:focus,
-        .form-group select:focus {
+        .form-group select:focus,
+        .form-group textarea:focus {
             outline: none;
             border-color: #667eea;
         }
@@ -236,6 +238,22 @@
             line-height: 1.8;
             font-size: 1.05em;
         }
+
+        .metrics {
+            margin: 10px 0 15px 0;
+            padding: 10px 15px;
+            background: #eef4ff;
+            border-radius: 6px;
+            font-size: 0.95em;
+        }
+
+        .metrics ul {
+            margin-left: 18px;
+        }
+
+        .metrics li {
+            margin-bottom: 4px;
+        }
     </style>
 </head>
 <body>
@@ -250,6 +268,7 @@
             <button class="tab" onclick="switchTab('parse')">Parse Resume</button>
             <button class="tab" onclick="switchTab('recommend')">Recommendations</button>
             <button class="tab" onclick="switchTab('pipeline')">Complete Pipeline</button>
+            <button class="tab" onclick="switchTab('eval')">Evaluate Letters</button>
         </div>
 
         <div class="content">
@@ -317,6 +336,24 @@
                 </div>
                 <button class="btn" onclick="runPipeline()">Run Complete Pipeline</button>
                 <div id="pipe-results" class="results"></div>
+            </div>
+
+            <!-- Evaluate Letters Tab (NEW) -->
+            <div id="eval" class="tab-content">
+                <h2>Evaluate Cover Letters</h2>
+                <p style="margin-bottom: 20px; color: #666;">
+                    Upload your cover letter and a reference cover letter. The system will compute BLEU and ROUGE scores.
+                </p>
+                <div class="form-group">
+                    <label for="eval-candidate-file">Your Cover Letter (candidate):</label>
+                    <input type="file" id="eval-candidate-file" accept=".txt, .pdf, .docx">
+                </div>
+                <div class="form-group">
+                    <label for="eval-reference-file">Reference Cover Letter:</label>
+                    <input type="file" id="eval-reference-file" accept=".txt, .pdf, .docx">
+                </div>
+                <button class="btn" onclick="evalCoverLetters()">Evaluate Letters</button>
+                <div id="eval-results" class="results"></div>
             </div>
         </div>
     </div>
@@ -433,31 +470,13 @@
             resultsDiv.classList.add('show');
 
             try {
-                // First parse the resume
-                const formData = new FormData();
-                formData.append('file', fileInput.files[0]);
-
-                const parseResponse = await fetch(`${API_BASE}/api/resume/parse`, {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (!parseResponse.ok) {
-                    throw new Error('Failed to parse resume');
-                }
-
-                // Get parsed resume data (need to upload and get full parsed data)
-                // For now, we'll use the parse-path endpoint workaround
-                // In production, you'd store the parsed resume temporarily
-
                 resultsDiv.innerHTML = '<div class="error">Please use the Complete Pipeline tab for full recommendations with uploaded files.</div>';
-                
             } catch (error) {
                 resultsDiv.innerHTML = `<div class="error">Error: ${error.message}</div>`;
             }
         }
 
-                async function runPipeline() {
+        async function runPipeline() {
             const fileInput = document.getElementById('pipe-resume-file');
             const jobCount = document.getElementById('pipe-job-count').value;
             const resultsDiv = document.getElementById('pipe-results');
@@ -489,7 +508,7 @@
                 const data = await response.json();
 
                 if (response.ok && data.status === 'success') {
-                    // ✅ 파이프라인 컨텍스트 저장 (나중에 카드 클릭 시 사용)
+                    // pipeline context save
                     pipelineContext.parsedResume = data.parsed_resume || null;
                     pipelineContext.topJobs =
                         (data.stages && data.stages.recommend && data.stages.recommend.top_jobs) || [];
@@ -513,7 +532,7 @@
                         </div>`;
                     }
 
-                    // 3. Recommendations (카드 클릭 가능하게 변경)
+                    // 3. Recommendations 
                     if (data.stages.recommend && data.stages.recommend.top_jobs) {
                         html += `<div class="result-item">
                             <h3>3. Top Job Recommendations</h3>`;
@@ -540,12 +559,12 @@
                         html += '</div>';
                     }
 
-                    // 4. 커버레터 섹션 (비워둔 상태로 만들어두고, 나중에 함수에서 채움)
+                    // 4. cover letter section placeholder
                     html += `<div class="result-item" id="pipe-cover-letter-section"></div>`;
 
                     resultsDiv.innerHTML = html;
 
-                    // 파이프라인이 기본으로 생성해둔 커버레터가 있으면 초기값으로 렌더
+                    // If the pipeline has a default generated cover letter, render it as the initial value
                     if (data.stages.cover_letter && data.stages.cover_letter.status === 'success') {
                         renderCoverLetter({
                             job_title: data.stages.cover_letter.job_title,
@@ -626,6 +645,60 @@
             }
         }
 
+        // NEW: Evaluate Letters (two files -> BLEU/ROUGE)
+        async function evalCoverLetters() {
+            const candInput = document.getElementById('eval-candidate-file');
+            const refInput = document.getElementById('eval-reference-file');
+            const resultsDiv = document.getElementById('eval-results');
+
+            if (!candInput.files[0] || !refInput.files[0]) {
+                alert('Please select both candidate and reference files');
+                return;
+            }
+
+            resultsDiv.innerHTML = '<div class="loading">Evaluating cover letters...</div>';
+            resultsDiv.classList.add('show');
+
+            const formData = new FormData();
+            formData.append('candidate_file', candInput.files[0]);
+            formData.append('reference_file', refInput.files[0]);
+
+            try {
+                const response = await fetch(`${API_BASE}/api/cover-letter/eval`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (!response.ok || data.status !== 'success') {
+                    throw new Error(data.detail || data.message || 'Evaluation failed');
+                }
+
+                const bleu = (data.bleu * 100).toFixed(1);
+                const rouge1 = (data.rouge1 * 100).toFixed(1);
+                const rougeL = (data.rougeL * 100).toFixed(1);
+
+                resultsDiv.innerHTML = `
+                    <div class="success">
+                        <h3>✓ Evaluation Completed</h3>
+                        <div class="metrics">
+                            <h4>Metrics</h4>
+                            <ul>
+                                <li><strong>BLEU:</strong> ${bleu}%</li>
+                                <li><strong>ROUGE-1 F1:</strong> ${rouge1}%</li>
+                                <li><strong>ROUGE-L F1:</strong> ${rougeL}%</li>
+                            </ul>
+                        </div>
+                        <p>You can adjust your cover letter and re-upload to compare scores.</p>
+                    </div>
+                `;
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+            }
+        }
+
     </script>
 </body>
 </html>
+
