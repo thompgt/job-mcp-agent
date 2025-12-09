@@ -9,7 +9,7 @@ This provides a beautiful UI for the MCP job application pipeline with:
 - Job details view
 - Cover letter generation with download
 """
-from fastapi import FastAPI, Request, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import FastAPI, Request, UploadFile, File, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
@@ -629,10 +629,12 @@ HTML_TEMPLATE = """
         }
         
         async function startPolling() {
-            pollInterval = setInterval(async () => {
+            // Use WebSocket for real-time updates instead of polling
+            const ws = new WebSocket(`ws://localhost:8000/ws/${sessionId}`);
+            
+            ws.onmessage = async (event) => {
                 try {
-                    const response = await fetch('/api/status/' + sessionId);
-                    const status = await response.json();
+                    const status = JSON.parse(event.data);
                     
                     // Update agent status
                     if (status.agent_status === 'running') {
@@ -641,7 +643,7 @@ HTML_TEMPLATE = """
                         updateStatus('agentStatus', '✅ Complete', 'completed');
                     } else if (status.agent_status === 'error') {
                         updateStatus('agentStatus', '❌ Error', 'error');
-                        clearInterval(pollInterval);
+                        ws.close();
                         return;
                     }
                     
@@ -669,14 +671,23 @@ HTML_TEMPLATE = """
                     if (status.agent_status === 'completed' && status.has_matches) {
                         updateStatus('matchStatus', '✅ Matched', 'completed');
                         
-                        // Stop polling and get matches
-                        clearInterval(pollInterval);
+                        // Close WebSocket and get matches
+                        ws.close();
                         await matchJobs();
                     }
                 } catch (error) {
-                    console.error('Polling error:', error);
+                    console.error('WebSocket message error:', error);
                 }
-            }, 1000);
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                updateStatus('agentStatus', '❌ Connection Error', 'error');
+            };
+            
+            ws.onclose = () => {
+                console.log('WebSocket connection closed');
+            };
         }
         
         async function matchJobs() {
@@ -994,13 +1005,75 @@ async def generate_cover_letter_endpoint(session_id: str, request: Request):
     
     return JSONResponse(result)
 
+@app.websocket("/ws/{session_id}")
+async def websocket_endpoint(websocket: WebSocket, session_id: str):
+    """WebSocket endpoint for real-time status updates.
+    
+    OPTIMIZATION: Replaces polling with push-based updates.
+    """
+    await websocket.accept()
+    logger.info(f"WebSocket connected: {session_id}")
+    
+    try:
+        while True:
+            if session_id not in sessions:
+                await websocket.send_json({
+                    "error": "Session not found"
+                })
+                break
+            
+            session = sessions[session_id]
+            
+            # Send current status
+            parsed_resume = None
+            if session.get("agent_status") == "completed" and session.get("parsed_resume"):
+                candidate = session.get("parsed_resume")
+                parsed_resume = {
+                    "name": candidate.get("name"),
+                    "skills_count": candidate.get("skills_count", 0),
+                    "experience_count": candidate.get("experience_count", 0),
+                    "education_count": candidate.get("education_count", 0)
+                }
+            
+            await websocket.send_json({
+                "agent_status": session.get("agent_status", "unknown"),
+                "resume_status": session.get("resume_status", "unknown"),
+                "job_fetch_status": session.get("job_fetch_status", "pending"),
+                "total_jobs": session.get("total_jobs", 0),
+                "error": session.get("agent_error") or session.get("job_fetch_error"),
+                "parsed_resume": parsed_resume,
+                "has_matches": len(session.get("matches", [])) > 0
+            })
+            
+            # If workflow completed, close connection
+            if session.get("agent_status") in ["completed", "error"]:
+                await asyncio.sleep(1)  # Give client time to process
+                break
+            
+            await asyncio.sleep(0.5)  # Push updates every 500ms
+            
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected: {session_id}")
+    except Exception as e:
+        logger.exception(f"WebSocket error for {session_id}: {e}")
+        try:
+            await websocket.close()
+        except:
+            pass
+
 if __name__ == "__main__":
     import uvicorn
     print("=" * 70)
-    print("🚀 Starting Job Application Assistant")
+    print("🚀 Starting Job Application Assistant (OPTIMIZED)")
     print("=" * 70)
     print(f"\n📱 Web Interface: http://localhost:8000")
     print(f"🔧 MCP Server: {MCP_SERVER_URL}")
+    print(f"🔌 WebSocket: ws://localhost:8000/ws/{{session_id}}")
+    print("\n⚡ Performance Optimizations:")
+    print("   • Parallel execution (parse + fetch)")
+    print("   • Cached ML models")
+    print("   • WebSocket updates")
+    print("   • Faster LLM (llama3.2:1b)")
     print("\n⚠️  Make sure the MCP server is running:")
     print("   python server/mcp_pipeline_server.py")
     print("\n" + "=" * 70 + "\n")

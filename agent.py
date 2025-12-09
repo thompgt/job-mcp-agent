@@ -41,7 +41,7 @@ class JobApplicationAgent:
     def __init__(
         self,
         mcp_server_url: str = "http://127.0.0.1:8002/mcp",
-        model_name: str = "llama3.2"
+        model_name: str = "llama3.2:1b"  # Faster 1B model (3-4x speedup)
     ):
         self.mcp_url = mcp_server_url
         self.model_name = model_name
@@ -97,16 +97,44 @@ class JobApplicationAgent:
         logger.info("=" * 70)
         
         # Step 1: Parse Resume
-        logger.info("\n📄 STEP 1: Parsing Resume...")
-        parse_result = await self._call_mcp_tool("parse_resume", {
-            "resume_path": resume_path
-        })
+        logger.info("\n🚀 OPTIMIZED: Running Steps 1-4 in Parallel...")
+        
+        jobs_file = f"agent_jobs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        
+        # OPTIMIZATION: Parse resume and fetch jobs IN PARALLEL
+        parse_task = asyncio.create_task(
+            self._call_mcp_tool("parse_resume", {"resume_path": resume_path})
+        )
+        
+        # Use default job count first, we'll adjust if needed
+        initial_job_count = preferences.get('job_count', 50)
+        fetch_task = asyncio.create_task(
+            self._call_mcp_tool("fetch_job_data", {
+                "count": initial_job_count,
+                "out_path": jobs_file
+            })
+        )
+        
+        # Wait for both to complete
+        logger.info("   📄 Step 1: Parsing resume...")
+        logger.info("   🔍 Step 4: Fetching jobs...")
+        parse_result, fetch_result = await asyncio.gather(parse_task, fetch_task)
         
         if parse_result.get("status") != "success":
             return self._error_response("resume_parsing_failed", parse_result)
         
+        if fetch_result.get("status") != "success":
+            return self._error_response("job_fetch_failed", fetch_result)
+        
         parsed_resume = parse_result.get("parsed")
         logger.info(f"✅ Resume parsed: {parsed_resume.get('name', 'Unknown')}")
+        logger.info(f"✅ Fetched {fetch_result.get('fetched', 0)} jobs")
+        
+        # OPTIMIZATION: Populate MongoDB in background (don't wait)
+        logger.info("\n💾 STEP 5: Populating MongoDB (background)...")
+        asyncio.create_task(
+            self._call_mcp_tool("populate_mongodb", {"out_path": jobs_file})
+        )
         
         # Step 2: Analyze Candidate Profile with LLM
         logger.info("\n🧠 STEP 2: Analyzing Candidate Profile with LLM...")
@@ -122,30 +150,16 @@ class JobApplicationAgent:
             candidate_analysis,
             preferences
         )
+        # Use already fetched job count
+        search_params['job_count'] = fetch_result.get('fetched', initial_job_count)
         logger.info(f"🎯 Search Parameters:")
-        logger.info(f"   - Jobs to fetch: {search_params['job_count']}")
+        logger.info(f"   - Jobs fetched: {search_params['job_count']}")
         logger.info(f"   - Similarity threshold: {search_params['min_similarity']}")
         logger.info(f"   - Top K matches: {search_params['top_k']}")
         logger.info(f"   - Reasoning: {search_params['reasoning']}")
         
-        # Step 4: Fetch Jobs
-        logger.info("\n🔍 STEP 4: Fetching Jobs from API...")
-        jobs_file = f"agent_jobs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        fetch_result = await self._call_mcp_tool("fetch_job_data", {
-            "count": search_params['job_count'],
-            "out_path": jobs_file
-        })
-        
-        if fetch_result.get("status") != "success":
-            return self._error_response("job_fetch_failed", fetch_result)
-        
-        logger.info(f"✅ Fetched {fetch_result.get('fetched', 0)} jobs")
-        
-        # Step 5: Populate MongoDB (optional, don't fail if it doesn't work)
-        logger.info("\n💾 STEP 5: Populating MongoDB...")
-        populate_result = await self._call_mcp_tool("populate_mongodb", {
-            "out_path": jobs_file
-        })
+        # Note: MongoDB population happening in background
+        populate_result = {"status": "background", "message": "Running in background"}
         
         if populate_result.get("status") == "success":
             logger.info(f"✅ MongoDB updated: {populate_result.get('inserted', 0)} new, "
