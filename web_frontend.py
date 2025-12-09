@@ -623,9 +623,9 @@ HTML_TEMPLATE = """
         function displayResumeInfo(resume) {
             document.getElementById('resumeCard').classList.remove('hidden');
             document.getElementById('resumeName').textContent = resume.name || 'Unknown';
-            document.getElementById('skillsCount').textContent = (resume.skills || []).length;
-            document.getElementById('experienceCount').textContent = (resume.experience || []).length;
-            document.getElementById('educationCount').textContent = (resume.education || []).length;
+            document.getElementById('skillsCount').textContent = resume.skills_count || 0;
+            document.getElementById('experienceCount').textContent = resume.experience_count || 0;
+            document.getElementById('educationCount').textContent = resume.education_count || 0;
         }
         
         async function startPolling() {
@@ -988,9 +988,9 @@ async def get_status(session_id: str):
         candidate = session.get("parsed_resume")
         parsed_resume = {
             "name": candidate.get("name"),
-            "skills_count": candidate.get("skills_count", 0),
-            "experience_count": candidate.get("experience_count", 0),
-            "education_count": candidate.get("education_count", 0)
+            "skills_count": candidate.get("skills_count", len(candidate.get("skills", []))),
+            "experience_count": candidate.get("experience_count", len(candidate.get("experience", []))),
+            "education_count": candidate.get("education_count", len(candidate.get("education", [])))
         }
     
     return JSONResponse({
@@ -1100,9 +1100,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 candidate = session.get("parsed_resume")
                 parsed_resume = {
                     "name": candidate.get("name"),
-                    "skills_count": candidate.get("skills_count", 0),
-                    "experience_count": candidate.get("experience_count", 0),
-                    "education_count": candidate.get("education_count", 0)
+                    "skills_count": candidate.get("skills_count", len(candidate.get("skills", []))),
+                    "experience_count": candidate.get("experience_count", len(candidate.get("experience", []))),
+                    "education_count": candidate.get("education_count", len(candidate.get("education", [])))
                 }
             
             await websocket.send_json({
