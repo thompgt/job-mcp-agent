@@ -767,7 +767,19 @@ HTML_TEMPLATE = """
         async function generateCoverLetter() {
             const btn = document.getElementById('generateBtn');
             btn.disabled = true;
-            btn.innerHTML = '<span class="loading-spinner"></span> Generating...';
+            btn.innerHTML = '<span class="loading-spinner"></span> Generating with AI...';
+            
+            // Show a more informative message
+            const coverLetterSection = document.getElementById('coverLetterSection');
+            coverLetterSection.classList.remove('hidden');
+            document.getElementById('coverLetterText').innerHTML = `
+                <div style="text-align: center; padding: 40px; color: #667eea;">
+                    <div class="loading-spinner" style="width: 40px; height: 40px; margin: 0 auto 20px;"></div>
+                    <p style="font-size: 1.1em; margin: 10px 0;"><strong>🤖 AI is crafting your cover letter...</strong></p>
+                    <p style="color: #6b7280; font-size: 0.9em;">Using Ollama Llama 3.2 to analyze your resume and the job description</p>
+                    <p style="color: #9ca3af; font-size: 0.85em; margin-top: 15px;">This typically takes 10-30 seconds</p>
+                </div>
+            `;
             
             try {
                 const response = await fetch('/api/generate-cover-letter/' + sessionId, {
@@ -781,14 +793,29 @@ HTML_TEMPLATE = """
                 if (result.status === 'success') {
                     currentCoverLetter = result.cover_letter;
                     document.getElementById('coverLetterText').textContent = result.cover_letter;
-                    document.getElementById('coverLetterSection').classList.remove('hidden');
                     btn.innerHTML = '✅ Generated!';
+                    
+                    // Scroll to cover letter
+                    coverLetterSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                 } else {
+                    document.getElementById('coverLetterText').innerHTML = `
+                        <div style="color: #dc2626; padding: 20px; text-align: center;">
+                            <p><strong>❌ Generation failed</strong></p>
+                            <p style="font-size: 0.9em; margin-top: 10px;">${result.error || 'Unknown error'}</p>
+                        </div>
+                    `;
                     alert('Failed to generate cover letter: ' + result.error);
                     btn.disabled = false;
                     btn.innerHTML = '✨ Generate Cover Letter';
+                    coverLetterSection.classList.add('hidden');
                 }
             } catch (error) {
+                document.getElementById('coverLetterText').innerHTML = `
+                    <div style="color: #dc2626; padding: 20px; text-align: center;">
+                        <p><strong>❌ Connection error</strong></p>
+                        <p style="font-size: 0.9em; margin-top: 10px;">${error.message}</p>
+                    </div>
+                `;
                 alert('Error generating cover letter: ' + error.message);
                 btn.disabled = false;
                 btn.innerHTML = '✨ Generate Cover Letter';
@@ -979,7 +1006,7 @@ async def match_jobs(session_id: str, request: Request):
 
 @app.post("/api/generate-cover-letter/{session_id}")
 async def generate_cover_letter_endpoint(session_id: str, request: Request):
-    """Generate cover letter for a specific job."""
+    """Generate cover letter for a specific job using Ollama LLM."""
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
     
@@ -995,13 +1022,29 @@ async def generate_cover_letter_endpoint(session_id: str, request: Request):
     data = await request.json()
     job = data.get("job")
     
-    logger.info(f"[{session_id}] Generating cover letter")
+    job_title = job.get("jobTitle") or job.get("title") or "Unknown"
+    company = job.get("companyName") or job.get("company") or "Unknown"
     
-    # Call cover letter generation tool
+    logger.info(f"[{session_id}] Generating cover letter for {job_title} at {company} using Ollama Llama 3.2")
+    logger.info(f"[{session_id}] This may take 10-30 seconds...")
+    
+    import time
+    start_time = time.time()
+    
+    # Call cover letter generation tool (this will use Ollama)
     result = await call_mcp_tool("create_cover_letter", {
         "resume": parsed_resume,
         "job": job
     })
+    
+    elapsed = time.time() - start_time
+    logger.info(f"[{session_id}] Cover letter generation completed in {elapsed:.1f} seconds")
+    
+    if result.get("status") == "success":
+        logger.info(f"[{session_id}] Generated cover letter length: {result.get('letter_length', 0)} characters")
+    else:
+        logger.error(f"[{session_id}] Cover letter generation failed: {result.get('error')}")
+        logger.error(f"[{session_id}] Error detail: {result.get('detail')}")
     
     return JSONResponse(result)
 

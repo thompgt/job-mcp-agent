@@ -6,8 +6,11 @@ from typing import Dict, Any, Optional
 # LangChain + Ollama
 try:
     from langchain_community.chat_models import ChatOllama
-    from langchain.schema import SystemMessage, HumanMessage
-except ImportError:
+    from langchain_core.messages import SystemMessage, HumanMessage
+except Exception as e:
+    # Catch ALL exceptions, not just ImportError
+    import logging
+    logging.warning(f"Failed to import ChatOllama: {type(e).__name__}: {e}")
     ChatOllama = None
     SystemMessage = HumanMessage = None
 
@@ -155,7 +158,7 @@ def generate_cover_letter(
     resume: Dict[str, Any],
     job: Dict[str, Any],
     *,
-    model_name: str = "llama3.2",
+    model_name: str = "llama3.2:1b",
     temperature: float = 0.7,
 ) -> str:
     """
@@ -221,6 +224,10 @@ def generate_cover_letter(
     # Try Ollama
     if ChatOllama is not None:
         try:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Generating cover letter with Ollama model: {model_name}")
+            
             llm = ChatOllama(
                 model=model_name,
                 temperature=temperature,
@@ -231,82 +238,27 @@ def generate_cover_letter(
                 HumanMessage(content=human_prompt),
             ]
 
+            logger.info("Invoking Ollama for cover letter generation...")
             response = llm.invoke(messages)
 
             if hasattr(response, "content"):
-                return response.content.strip()
+                letter = response.content.strip()
+                logger.info(f"Cover letter generated successfully via Ollama ({len(letter)} chars)")
+                return letter
+            else:
+                raise RuntimeError("Ollama response has no content")
 
-        except Exception:
-            # fall back below
-            pass
-
-    # -------- fallback path (no LLM) --------
-    job_title = (
-        job.get("title")
-        or job.get("jobTitle")
-        or job.get("name")
-        or "the position"
-    )
-    company_name = (
-        job.get("companyName")
-        or job.get("company")
-        or job.get("org")
-        or "the company"
-    )
-    greeting = f"Dear {company_name} Recruitment Team,"
-
-    paragraphs: list[str] = []
-
-    # intro
-    paragraphs.append(
-        f"{greeting}\n\n"
-        f"I am writing to express my interest in the {job_title} role at {company_name}. "
-        "With my background in quantitative analysis, software engineering, and data-driven research, "
-        "I am confident that I can contribute meaningfully to your team."
-    )
-
-    # skills paragraph
-    if resume.get("skills"):
-        skills_list = ", ".join(sorted(resume["skills"]))
-        paragraphs.append(
-            f"Across my academic and professional experiences, I have developed a toolkit that includes "
-            f"{skills_list}. I regularly apply these skills to build robust data pipelines, analyze complex "
-            "systems, and prototype solutions in fast-moving environments."
+        except Exception as e:
+            # NO FALLBACK - Raise the error so user knows what went wrong
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Ollama generation FAILED: {e}")
+            raise RuntimeError(
+                f"Cover letter generation failed. Ollama error: {str(e)}. "
+                f"Make sure Ollama is running (ollama serve) and model '{model_name}' is installed (ollama pull {model_name})"
+            ) from e
+    else:
+        # ChatOllama not available - fail immediately
+        raise RuntimeError(
+            "ChatOllama is not available. Install it with: pip install langchain-community"
         )
-
-    # experience paragraph(s) – light narrative over top 2–3 roles
-    experience = resume.get("experience") or []
-    if experience:
-        exp_lines: list[str] = []
-        for role in experience[:3]:
-            if not isinstance(role, dict):
-                continue
-            org = (role.get("organization") or "").strip()
-            title = (role.get("title") or "").strip()
-            period = (role.get("period") or "").strip()
-            highlights = role.get("highlights") or []
-            header_bits = [b for b in [title, org] if b]
-            header = " at ".join(header_bits)
-            if period:
-                header = f"{header} ({period})" if header else period
-            bullet = ""
-            if highlights:
-                bullet = highlights[0].strip()
-            if header:
-                if bullet:
-                    exp_lines.append(f"In {header}, I {bullet.lower()}")
-                else:
-                    exp_lines.append(f"In {header}, I deepened my technical and analytical skills.")
-        if exp_lines:
-            paragraphs.append(
-                "In my recent roles, I have consistently taken ownership of technically demanding work. "
-                + " ".join(exp_lines)
-            )
-
-    paragraphs.append(
-        "I am excited about the opportunity to bring this experience to your organization and to learn from "
-        "a team of engineers operating at scale. I would welcome the chance to discuss how my background "
-        "aligns with your needs. Thank you for your time and consideration."
-    )
-
-    return "\n\n".join(paragraphs)

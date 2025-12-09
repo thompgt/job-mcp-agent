@@ -301,7 +301,7 @@ def parse_resume(resume_path: str) -> dict:
 def create_cover_letter(
     resume: Dict[str, Any],
     job: Dict[str, Any],
-    model_name: str = "llama3.2",
+    model_name: str = "llama3.2:1b",
     temperature: float = 0.7
 ) -> dict:
     """Generate a personalized cover letter for a job posting.
@@ -354,11 +354,14 @@ def create_cover_letter(
             "letter_length": len(letter)
         }
     except Exception as e:
-        logger.exception(f"Failed to generate cover letter: {e}")
+        error_msg = str(e)
+        logger.exception(f"Failed to generate cover letter: {error_msg}")
+        logger.error(f"Full exception: {repr(e)}")
         return {
             "status": "error",
             "error": "generation_failed",
-            "detail": str(e)
+            "detail": error_msg,
+            "exception_type": type(e).__name__
         }
 
 
