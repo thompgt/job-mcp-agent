@@ -32,7 +32,7 @@ from agent import JobApplicationAgent
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Job Application Pipeline")
+app = FastAPI(title="Career Craft Agent")
 
 # Add CORS middleware
 app.add_middleware(
@@ -119,7 +119,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Job Application Assistant</title>
+    <title>🤖 Career Craft Agent</title>
     <style>
         * {
             margin: 0;
@@ -439,7 +439,7 @@ HTML_TEMPLATE = """
 <body>
     <div class="container">
         <div class="header">
-            <h1>🤖 Intelligent Job Application Agent</h1>
+            <h1>🤖 Career Craft Agent</h1>
             <p>Upload your resume and let our AI agent autonomously find your perfect match</p>
             <p style="font-size: 0.9em; opacity: 0.8;">Powered by Ollama Llama 3.2</p>
         </div>
@@ -1134,7 +1134,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 if __name__ == "__main__":
     import uvicorn
     print("=" * 70)
-    print("🚀 Starting Job Application Assistant (OPTIMIZED)")
+    print("🚀 Starting Career Craft (OPTIMIZED)")
     print("=" * 70)
     print(f"\n📱 Web Interface: http://localhost:8000")
     print(f"🔧 MCP Server: {MCP_SERVER_URL}")
