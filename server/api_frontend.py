@@ -10,6 +10,7 @@ MCP job application pipeline server. It exposes web-friendly endpoints for:
 
 Run with: uvicorn server.api_frontend:app --host 0.0.0.0 --port 8000
 """
+import io
 from __future__ import annotations
 
 import sys
@@ -17,9 +18,6 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 import json
 import logging
-from rouge_score import rouge_scorer
-from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-
 
 # Add project root to path
 project_root = Path(__file__).resolve().parents[1]
@@ -31,6 +29,11 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
+
+# evaluation library
+from rouge_score import rouge_scorer
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+from PyPDF2 import PdfReader
 
 # Local imports
 from get_data import fetch_jobs
@@ -92,10 +95,6 @@ class GenerateCoverLetterRequest(BaseModel):
     job_data: Dict[str, Any] = Field(..., description="Job posting data")
     model_name: str = Field("llama3.2", description="LLM model name")
     temperature: float = Field(0.7, ge=0.0, le=2.0, description="Generation temperature")
-    reference_letter: Optional[str] = Field(
-        None,
-        description="Optional reference cover letter for evaluation (BLEU/ROUGE)."
-    )
 
 
 class GenerateCoverLetterResponse(BaseModel):
@@ -103,10 +102,6 @@ class GenerateCoverLetterResponse(BaseModel):
     cover_letter: Optional[str] = None
     job_title: Optional[str] = None
     company: Optional[str] = None
-    message: str
-    bleu: Optional[float] = None
-    rouge1: Optional[float] = None
-    rougeL: Optional[float] = None
     message: str
 
 
@@ -147,6 +142,7 @@ async def root():
             "fetch_jobs": "/api/jobs/fetch",
             "parse_resume": "/api/resume/parse",
             "generate_cover_letter": "/api/cover-letter/generate",
+            "evaluate_cover_letters": "/api/cover-letter/eval",
             "recommend_jobs": "/api/jobs/recommend",
             "complete_pipeline": "/api/pipeline/run"
         }
@@ -309,54 +305,108 @@ async def generate_cover_letter_endpoint(request: GenerateCoverLetterRequest):
     logger.info(f"Generating cover letter for {job_title} at {company}")
     
     try:
-            letter = generate_cover_letter(
+        letter = generate_cover_letter(
             request.resume_data,
             request.job_data,
             model_name=request.model_name,
             temperature=request.temperature
         )
-
-        bleu_score = None
-        rouge1 = None
-        rougeL = None
-
-        # ✅ reference_letter 가 들어온 경우에만 평가
-        if request.reference_letter:
-            ref = request.reference_letter.strip()
-            hyp = letter.strip()
-
-            # BLEU (문장 단위)
-            smoothie = SmoothingFunction().method4
-            bleu_score = float(
-                sentence_bleu(
-                    [ref.split()],
-                    hyp.split(),
-                    smoothing_function=smoothie
-                )
-            )
-
-            # ROUGE-1 / ROUGE-L
-            scorer = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=True)
-            scores = scorer.score(ref, hyp)
-            rouge1 = float(scores['rouge1'].fmeasure)
-            rougeL = float(scores['rougeL'].fmeasure)
-
+        
         return GenerateCoverLetterResponse(
             status="success",
             cover_letter=letter,
             job_title=job_title,
             company=company,
-            bleu=bleu_score,
-            rouge1=rouge1,
-            rougeL=rougeL,
             message="Cover letter generated successfully"
         )
-
     except Exception as e:
         logger.exception(f"Failed to generate cover letter: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate cover letter: {str(e)}"
+        )
+
+
+# -----------------------------------------------------------------------------
+# Cover Letter Evaluation (optional)
+# -----------------------------------------------------------------------------
+
+@app.post("/api/cover-letter/eval")
+async def eval_cover_letters(
+    candidate_file: UploadFile = File(..., description="Candidate cover letter file (txt or pdf)"),
+    reference_file: UploadFile = File(..., description="Reference cover letter file (txt or pdf)")
+):
+    """
+    Evaluate a candidate cover letter against a reference cover letter
+    using BLEU and ROUGE metrics.
+
+    Both files can be:
+    - .txt (plain text)
+    - .pdf (we will extract text from the PDF)
+    """
+
+    def extract_text(raw_bytes: bytes, filename: str | None, content_type: str | None) -> str:
+        """Extract text from txt or pdf bytes."""
+        name = (filename or "").lower()
+        ctype = (content_type or "").lower()
+
+        # when pdf
+        if name.endswith(".pdf") or "pdf" in ctype:
+            reader = PdfReader(io.BytesIO(raw_bytes))
+            texts: list[str] = []
+            for page in reader.pages:
+                t = page.extract_text()
+                if t:
+                    texts.append(t)
+            return "\n".join(texts)
+
+        # when txt
+        return raw_bytes.decode("utf-8", errors="ignore")
+
+    try:
+        cand_bytes = await candidate_file.read()
+        ref_bytes = await reference_file.read()
+
+        cand_text = extract_text(cand_bytes, candidate_file.filename, candidate_file.content_type).strip()
+        ref_text = extract_text(ref_bytes, reference_file.filename, reference_file.content_type).strip()
+
+        if not cand_text or not ref_text:
+            raise HTTPException(
+                status_code=400,
+                detail="Both candidate and reference cover letters must be non-empty after text extraction."
+            )
+
+        # BLEU
+        smoothie = SmoothingFunction().method4
+        bleu = float(
+            sentence_bleu(
+                [ref_text.split()],
+                cand_text.split(),
+                smoothing_function=smoothie
+            )
+        )
+
+        # ROUGE-1 / ROUGE-L
+        scorer = rouge_scorer.RougeScorer(["rouge1", "rougeL"], use_stemmer=True)
+        scores = scorer.score(ref_text, cand_text)
+        rouge1 = float(scores["rouge1"].fmeasure)
+        rougeL = float(scores["rougeL"].fmeasure)
+
+        return {
+            "status": "success",
+            "bleu": bleu,
+            "rouge1": rouge1,
+            "rougeL": rougeL,
+            "message": "Evaluation completed successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to evaluate cover letters: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to evaluate cover letters: {str(e)}"
         )
 
 
@@ -425,7 +475,7 @@ async def recommend_jobs_endpoint(request: RecommendJobsRequest):
 
 @app.post("/api/pipeline/run")
 async def run_pipeline_endpoint(
-    # frontend에서 query string 으로 보내는 값들
+    # Values sent from frontend as query string
     job_count: int = Query(
         50, ge=1, le=200, description="Number of jobs to fetch"
     ),
@@ -440,9 +490,9 @@ async def run_pipeline_endpoint(
         True,
         description="Generate cover letter for first job"
     ),
-    # FormData 로 오는 파일 (❗필수지만, 422 막기 위해 Optional 로 받음)
+    #  File coming from FormData (optional to prevent 422)
     resume_file: UploadFile | None = File(
-        None, description="Resume file to process (FormData key: 'resume_file')"
+        None, description="Resume file to process"
     ),
 ):
     """Execute the complete job application pipeline.
@@ -455,14 +505,13 @@ async def run_pipeline_endpoint(
     """
     logger.info("Starting complete pipeline")
 
-    # 우리가 직접 validate 해서 400 에러로 반환 (FastAPI 422 방지)
     if resume_file is None:
         raise HTTPException(
             status_code=400,
             detail="Missing file: please send the resume as FormData with field name 'resume_file'.",
         )
 
-    # Query 파라미터들로 PipelineRequest 인스턴스 생성 (기존 로직 재사용)
+    # using Query parameters to create PipelineRequest instance
     request = PipelineRequest(
         job_count=job_count,
         jobs_file=jobs_file,
@@ -505,9 +554,6 @@ async def run_pipeline_endpoint(
                 "name": parsed_resume.get("name"),
                 "skills_count": len(parsed_resume.get("skills", [])),
             }
-
-            results["parsed_resume"] = parsed_resume
-
         except Exception as e:
             logger.exception(f"Parse failed: {e}")
             results["stages"]["parse"] = {"status": "error", "error": str(e)}
@@ -529,9 +575,6 @@ async def run_pipeline_endpoint(
                 "count": len(recommendations),
                 "top_jobs": recommendations[:5],  # Include top 5 in results
             }
-
-            results["recommendations"] = recommendations
-            
         except Exception as e:
             logger.exception(f"Recommendation failed: {e}")
             results["stages"]["recommend"] = {"status": "error", "error": str(e)}
@@ -567,8 +610,6 @@ async def run_pipeline_endpoint(
         # Cleanup
         if resume_path.exists():
             resume_path.unlink()
-
-
 
 
 # =============================================================================
