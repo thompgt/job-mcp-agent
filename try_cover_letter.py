@@ -25,10 +25,10 @@ from server.app.services.cover_letter_generator import generate_cover_letter
 # --- config section: tweak these for your local testing ----------------------
 
 # Point this at your actual resume file
-RESUME_PATH = Path("/Users/peterk/Downloads/kaloev_peter_resume.pdf")
+RESUME_PATH = Path("../Downloads/resume.pdf")
 
 # How many jobs to fetch from the API
-JOB_COUNT = 10
+JOB_COUNT = 15
 
 # How many of the fetched jobs to generate letters for (to keep output manageable)
 NUM_JOBS_TO_SAMPLE = 3
@@ -70,7 +70,7 @@ def load_jobs() -> List[Dict[str, Any]]:
 
 
 def main() -> None:
-    # 1) Parse your resume
+    # 1) Parse resume
     resume = load_resume()
 
     # 2) Fetch jobs from the API
