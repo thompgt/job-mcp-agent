@@ -72,6 +72,7 @@ The CareerCraft agent is designed to:
 
    ```bash
    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
 
 **2. Install Ollama and Pull Required Models**
 
