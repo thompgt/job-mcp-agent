@@ -57,57 +57,146 @@ The CareerCraft agent is designed to:
 ## 🧪 Future Enhancements
 
 
-## Running the MCP server (dev)
+## 🚀 Running the Application
 
-This repository contains a minimal, development MCP server implemented with FastAPI. The server uses an in-memory queue and is suitable for local testing and development.
-
-Prerequisites
+### Prerequisites
 - Python 3.10+
-- A working internet connection to install dependencies
+- MongoDB (local or Atlas connection)
+- Ollama installed and running (for cover letter generation)
+- Internet connection for API calls and model downloads
 
-Windows (cmd.exe) quick start
+### Setup Steps
 
-1. Create and activate a virtual environment:
+**1. Install Ollama and Pull Required Models**
+
+Download and install Ollama from [ollama.ai](https://ollama.ai)
+
+Then pull the required model:
+
+```cmd
+ollama pull llama3.2:1b
+```
+
+To verify Ollama is running:
+
+```cmd
+ollama list
+```
+
+You should see `llama3.2:1b` in the list of available models.
+
+---
+
+### Quick Start (Recommended)
+
+**Option 1: Using the Launcher Script**
+
+The easiest way to start both the MCP server and web frontend:
+
+```cmd
+python launch.py
+```
+
+This will:
+1. Start the MCP Pipeline Server on port 8002 (`http://127.0.0.1:8002/mcp`)
+2. Start the Web Frontend on port 8000 (`http://127.0.0.1:8000`)
+3. Automatically open your browser to the application
+
+Both servers run in separate terminal windows. Close those windows to stop the servers.
+
+---
+
+### Manual Setup (If Launcher Doesn't Work)
+
+**Step 1: Create and activate a virtual environment**
 
 ```cmd
 python -m venv .venv
 .venv\Scripts\activate
 ```
 
-2. Install dependencies:
+**Step 2: Install dependencies**
 
 ```cmd
 pip install -r requirements.txt
 ```
 
-3. Start the server (uvicorn):
+**Step 3: Configure environment variables (optional)**
 
-```cmd
-uvicorn server.app.main:app --reload --port 8000
+Create a `.env` file in the project root:
+
+```env
+MONGO_URL=mongodb://localhost:27017
+# Or for MongoDB Atlas:
+# MONGO_USER=your_username
+# MONGO_PASS=your_password
 ```
 
-4. Try the API endpoints (example using curl/powershell or a browser):
+**Step 4: Start the MCP Server**
 
-- Trigger ingestion (calls `get_data.fetch_jobs`):
-
-```cmd
-curl -X POST http://127.0.0.1:8000/api/ingest
-```
-
-- List jobs:
+Open a terminal and run:
 
 ```cmd
-curl http://127.0.0.1:8000/api/jobs
+python server\mcp_pipeline_server.py
 ```
 
-Notes
-- The in-memory queue is not persistent. For production, use Redis/RabbitMQ and a real DB (Postgres).
-- The ingest endpoint calls `get_data.fetch_jobs()` which may perform HTTP requests; tests use a mocked fetch to avoid network I/O.
+The MCP server will start on `http://127.0.0.1:8002/mcp`
 
-Running tests
+**Step 5: Start the Web Frontend**
 
-With the virtualenv active and dependencies installed, run:
+Open a **second terminal** and run:
+
+```cmd
+python web_frontend.py
+```
+
+The web frontend will start on `http://127.0.0.1:8000`
+
+**Step 6: Open your browser**
+
+Navigate to `http://127.0.0.1:8000`
+
+---
+
+### Available MCP Tools
+
+The FastMCP server exposes 6 tools:
+
+1. **`fetch_job_data`** - Fetch job listings from API
+2. **`populate_mongodb`** - Store jobs in MongoDB with deduplication
+3. **`parse_resume`** - Parse resume files (PDF/DOCX/TXT)
+4. **`create_cover_letter`** - Generate personalized cover letters
+5. **`match_jobs_to_resume`** - Semantic job matching using embeddings
+6. **`run_complete_pipeline`** - Orchestrate the full pipeline
+
+---
+
+### Testing the MCP Server Directly
+
+You can test individual MCP tools using curl or the FastMCP client:
+
+```cmd
+curl -X POST http://127.0.0.1:8002/mcp ^
+  -H "Content-Type: application/json" ^
+  -d "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"fetch_job_data\",\"arguments\":{\"count\":10}},\"id\":1}"
+```
+
+---
+
+### Running Tests
+
+With the virtualenv active and dependencies installed:
 
 ```cmd
 pytest -q
 ```
+
+---
+
+### Notes
+
+- **Ollama must be running** for cover letter generation to work. Start Ollama before launching the application.
+- MongoDB connection is optional for job fetching but required for job storage and matching from database
+- The matching engine will download sentence-transformer models on first run (~90MB)
+- Different LLM models can be specified via the `model_name` parameter (default: `llama3.2:1b`)
+- For production deployment, use proper process managers and secure MongoDB connections
