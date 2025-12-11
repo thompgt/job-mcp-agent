@@ -63,11 +63,17 @@ The CareerCraft agent is designed to:
 - Python 3.10+
 - MongoDB (local or Atlas connection)
 - Ollama installed and running (for cover letter generation)
-- Internet connection for API calls and model downloads
+- Internet connection for API calls and model download
+- Homebrew to simplify installing Python and Git if on MacOS
 
 ### Setup Steps
 
-**1. Install Ollama and Pull Required Models**
+**1. Install Homebrew (optional but convenient):**
+
+   ```bash
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+**2. Install Ollama and Pull Required Models**
 
 Download and install Ollama from [ollama.ai](https://ollama.ai)
 
