@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  mongo:
+    image: mongo:6.0
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    command: uvicorn server.app.main:app --host 0.0.0.0 --port 8002
+    ports:
+      - "8002:8002"
+    depends_on:
+      - mongo
+    environment:
+      - MONGO_HOST=mongo
+      - MONGO_PORT=27017
+    volumes:
+      - ./:/app
+    healthcheck:
+      test: ["CMD-SHELL","curl -f http://localhost:8002/mcp || curl -f http://localhost:8002/ || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    command: python web_frontend.py
+    ports:
+      - "8000:8000"
+    depends_on:
+      - api
+    volumes:
+      - ./:/app
+
+volumes:
+  mongo_data:
