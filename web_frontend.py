@@ -560,6 +560,32 @@ HTML_TEMPLATE = """
                 </div>
             </div>
         </div>
+
+        <!-- Agent Insights Section -->
+        <div class="card hidden" id="insightsCard">
+            <h2>💡 AI Agent Analysis</h2>
+            <div class="info-grid" style="margin-top: 20px;">
+                <div class="info-item" style="border-left-color: #764ba2;">
+                    <div class="info-label">Experience Level</div>
+                    <div class="info-value" id="insightExpLevel">-</div>
+                </div>
+                <div class="info-item" style="border-left-color: #764ba2;">
+                    <div class="info-label">Career Stage</div>
+                    <div class="info-value" id="insightCareerStage" style="font-size: 1.1em;">-</div>
+                </div>
+            </div>
+            
+            <div style="margin-top: 20px; padding: 15px; background: #f8f9ff; border-radius: 8px;">
+                <h4 style="color: #667eea; margin-bottom: 10px;">🧠 Agent's Matching Strategy</h4>
+                <p id="insightStrategy" style="color: #4b5563; font-style: italic;"></p>
+            </div>
+            
+            <div id="matchInsightsSection" style="margin-top: 20px; padding: 15px; background: #f0fdf4; border-radius: 8px; border-left: 4px solid #22c55e;">
+                <h4 style="color: #166534; margin-bottom: 10px;">🎯 Recommendation Insights</h4>
+                <div id="insightBestMatch" style="margin-bottom: 8px; font-weight: 600;"></div>
+                <div id="insightAssessment" style="color: #374151;"></div>
+            </div>
+        </div>
         
         <!-- Step 3: Job Recommendations -->
         <div class="card hidden" id="jobsCard">
@@ -763,6 +789,9 @@ HTML_TEMPLATE = """
                     updateStatus('matchStatus', 'Completed', 'completed');
                     matchedJobs = result.matches;
                     displayJobs(result.matches);
+                    if (result.agent_reasoning) {
+                        displayInsights(result.agent_reasoning);
+                    }
                 } else {
                     updateStatus('matchStatus', 'Error', 'error');
                     alert('Failed to match jobs: ' + result.error);
@@ -771,6 +800,21 @@ HTML_TEMPLATE = """
                 updateStatus('matchStatus', 'Error', 'error');
                 alert('Error matching jobs: ' + error.message);
             }
+        }
+        
+        function displayInsights(reasoning) {
+            document.getElementById('insightsCard').classList.remove('hidden');
+            
+            const analysis = reasoning.candidate_analysis || {};
+            document.getElementById('insightExpLevel').textContent = analysis.experience_level || 'Unknown';
+            document.getElementById('insightCareerStage').textContent = analysis.career_stage || 'N/A';
+            
+            const params = reasoning.search_parameters || {};
+            document.getElementById('insightStrategy').textContent = params.reasoning || 'No specific strategy provided.';
+            
+            const insights = reasoning.match_insights || {};
+            document.getElementById('insightBestMatch').textContent = '💡 ' + (insights.best_match || 'Best fit analysis pending...');
+            document.getElementById('insightAssessment').textContent = insights.overall_assessment || 'Overall assessment pending...';
         }
         
         function displayJobs(jobs) {
