@@ -609,9 +609,29 @@ HTML_TEMPLATE = """
                 <div id="modalJobDescription" class="job-description"></div>
             </div>
             
-            <div style="margin: 20px 0;">
-                <button class="btn" onclick="generateCoverLetter()" id="generateBtn">
-                    ✨ Generate Cover Letter
+            <div style="margin: 20px 0; padding: 20px; background: #f8f9ff; border-radius: 12px; border: 1px solid #e0e7ff;">
+                <h3 style="margin-bottom: 15px; color: #4338ca;">✨ Customize Your Cover Letter</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+                    <div>
+                        <label style="display: block; font-size: 0.9em; font-weight: 600; color: #4b5563; margin-bottom: 8px;">Desired Tone</label>
+                        <select id="letterTone" style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #d1d5db; background: white; font-size: 14px;">
+                            <option value="professional">Professional (Balanced)</option>
+                            <option value="enthusiastic">Enthusiastic (Passionate)</option>
+                            <option value="concise">Concise (Direct)</option>
+                            <option value="academic">Academic (Formal)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="display: block; font-size: 0.9em; font-weight: 600; color: #4b5563; margin-bottom: 8px;">Desired Length</label>
+                        <select id="letterLength" style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #d1d5db; background: white; font-size: 14px;">
+                            <option value="short">Short (~200 words)</option>
+                            <option value="medium" selected>Medium (~400 words)</option>
+                            <option value="long">Long (~600 words)</option>
+                        </select>
+                    </div>
+                </div>
+                <button class="btn" onclick="generateCoverLetter()" id="generateBtn" style="width: 100%; padding: 15px; font-size: 1.1em;">
+                    ✨ Generate Tailored Cover Letter
                 </button>
             </div>
             
@@ -894,6 +914,9 @@ HTML_TEMPLATE = """
         
         async function generateCoverLetter() {
             const btn = document.getElementById('generateBtn');
+            const tone = document.getElementById('letterTone').value;
+            const length = document.getElementById('letterLength').value;
+            
             btn.disabled = true;
             btn.innerHTML = '<span class="loading-spinner"></span> Generating with AI...';
             
@@ -904,7 +927,7 @@ HTML_TEMPLATE = """
                 <div style="text-align: center; padding: 40px; color: #667eea;">
                     <div class="loading-spinner" style="width: 40px; height: 40px; margin: 0 auto 20px;"></div>
                     <p style="font-size: 1.1em; margin: 10px 0;"><strong>🤖 AI is crafting your cover letter...</strong></p>
-                    <p style="color: #6b7280; font-size: 0.9em;">Using Ollama Llama 3.2 to analyze your resume and the job description</p>
+                    <p style="color: #6b7280; font-size: 0.9em;">Using Ollama Llama 3.2 with <b>${tone}</b> tone and <b>${length}</b> length</p>
                     <p style="color: #9ca3af; font-size: 0.85em; margin-top: 15px;">This typically takes 10-30 seconds</p>
                 </div>
             `;
@@ -913,7 +936,11 @@ HTML_TEMPLATE = """
                 const response = await fetch('/api/generate-cover-letter/' + sessionId, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({job: currentJob})
+                    body: JSON.stringify({
+                        job: currentJob,
+                        tone: tone,
+                        length: length
+                    })
                 });
                 
                 const result = await response.json();
@@ -934,7 +961,7 @@ HTML_TEMPLATE = """
                     `;
                     alert('Failed to generate cover letter: ' + result.error);
                     btn.disabled = false;
-                    btn.innerHTML = '✨ Generate Cover Letter';
+                    btn.innerHTML = '✨ Generate Tailored Cover Letter';
                     coverLetterSection.classList.add('hidden');
                 }
             } catch (error) {
@@ -946,7 +973,7 @@ HTML_TEMPLATE = """
                 `;
                 alert('Error generating cover letter: ' + error.message);
                 btn.disabled = false;
-                btn.innerHTML = '✨ Generate Cover Letter';
+                btn.innerHTML = '✨ Generate Tailored Cover Letter';
             }
         }
         
@@ -1157,12 +1184,13 @@ async def generate_cover_letter_endpoint(session_id: str, request: Request):
     
     data = await request.json()
     job = data.get("job")
+    tone = data.get("tone", "professional")
+    length = data.get("length", "medium")
     
     job_title = job.get("jobTitle") or job.get("title") or "Unknown"
     company = job.get("companyName") or job.get("company") or "Unknown"
     
-    logger.info(f"[{session_id}] Generating cover letter for {job_title} at {company} using Ollama Llama 3.2")
-    logger.info(f"[{session_id}] This may take 10-30 seconds...")
+    logger.info(f"[{session_id}] Generating cover letter for {job_title} at {company} (Tone: {tone}, Length: {length})")
     
     import time
     start_time = time.time()
@@ -1170,7 +1198,9 @@ async def generate_cover_letter_endpoint(session_id: str, request: Request):
     # Call cover letter generation tool (this will use Ollama)
     result = await call_mcp_tool("create_cover_letter", {
         "resume": parsed_resume,
-        "job": job
+        "job": job,
+        "tone": tone,
+        "length": length
     })
     
     elapsed = time.time() - start_time

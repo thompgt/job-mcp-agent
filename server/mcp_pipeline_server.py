@@ -302,7 +302,9 @@ def create_cover_letter(
     resume: Dict[str, Any],
     job: Dict[str, Any],
     model_name: str = "llama3.2:1b",
-    temperature: float = 0.7
+    temperature: float = 0.7,
+    tone: str = "professional",
+    length: str = "medium"
 ) -> dict:
     """Generate a personalized cover letter for a job posting.
     
@@ -311,6 +313,8 @@ def create_cover_letter(
         job: Job posting dictionary
         model_name: LLM model name for generation (default: "llama3.2")
         temperature: Temperature for text generation (default: 0.7)
+        tone: Tone of the letter (professional, enthusiastic, concise, academic)
+        length: Length of the letter (short, medium, long)
     
     Returns:
         Dictionary with the generated cover letter or error
@@ -335,14 +339,16 @@ def create_cover_letter(
         "Unknown"
     )
     
-    logger.info(f"Generating cover letter for {job_title} at {company}")
+    logger.info(f"Generating cover letter for {job_title} at {company} (Tone: {tone}, Length: {length})")
     
     try:
         letter = generate_cover_letter(
             resume,
             job_data,
             model_name=model_name,
-            temperature=temperature
+            temperature=temperature,
+            tone=tone,
+            length=length
         )
         
         logger.info("Cover letter generated successfully")
@@ -351,7 +357,11 @@ def create_cover_letter(
             "cover_letter": letter,
             "job_title": job_title,
             "company": company,
-            "letter_length": len(letter)
+            "letter_length": len(letter),
+            "parameters": {
+                "tone": tone,
+                "length": length
+            }
         }
     except Exception as e:
         error_msg = str(e)
