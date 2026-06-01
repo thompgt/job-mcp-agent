@@ -17,9 +17,59 @@ import asyncio
 import json
 import sys
 import logging
+import os
 from typing import Dict, Any, Optional
 from datetime import datetime
 import uuid
+import pymongo
+from urllib.parse import quote_plus
+
+# MongoDB configuration
+MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
+if os.getenv("MONGO_PASS") and "<db_password>" in MONGO_URL:
+    MONGO_URL = MONGO_URL.replace("<db_password>", quote_plus(os.getenv("MONGO_PASS", "")))
+
+class MongoSessionManager:
+    """Manages session persistence in MongoDB."""
+    def __init__(self, mongo_url: str):
+        try:
+            self.client = pymongo.MongoClient(mongo_url, serverSelectionTimeoutMS=5000)
+            self.client.admin.command("ping")
+            self.db = self.client["careercraft"]
+            self.collection = self.db["sessions"]
+            self.collection.create_index("session_id", unique=True)
+            self.enabled = True
+            logging.info("Connected to MongoDB for session storage")
+        except Exception as e:
+            logging.error(f"Failed to connect to MongoDB for sessions: {e}")
+            self.enabled = False
+            self.fallback_sessions = {}
+
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        if self.enabled:
+            return self.collection.find_one({"session_id": session_id})
+        return self.fallback_sessions.get(session_id)
+
+    def update_session(self, session_id: str, updates: Dict[str, Any]):
+        if self.enabled:
+            self.collection.update_one(
+                {"session_id": session_id},
+                {"$set": updates},
+                upsert=True
+            )
+        else:
+            if session_id not in self.fallback_sessions:
+                self.fallback_sessions[session_id] = {}
+            self.fallback_sessions[session_id].update(updates)
+
+    def delete_session(self, session_id: str):
+        if self.enabled:
+            self.collection.delete_one({"session_id": session_id})
+        else:
+            self.fallback_sessions.pop(session_id, None)
+
+# Initialize session manager
+session_manager = MongoSessionManager(MONGO_URL)
 
 # Add project root
 project_root = Path(__file__).resolve().parent
@@ -42,9 +92,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# In-memory storage for session state
-sessions: Dict[str, Dict[str, Any]] = {}
 
 # MCP server URL
 MCP_SERVER_URL = "http://127.0.0.1:8002/mcp"
@@ -77,7 +124,7 @@ async def background_job_fetching(session_id: str, job_count: int = 50):
     
     try:
         # Update session status
-        sessions[session_id]["job_fetch_status"] = "fetching"
+        session_manager.update_session(session_id, {"job_fetch_status": "fetching"})
         
         # Step 1: Fetch jobs
         fetch_result = await call_mcp_tool("fetch_job_data", {
@@ -86,12 +133,16 @@ async def background_job_fetching(session_id: str, job_count: int = 50):
         })
         
         if fetch_result.get("status") != "success":
-            sessions[session_id]["job_fetch_status"] = "error"
-            sessions[session_id]["job_fetch_error"] = fetch_result.get("error", "Unknown error")
+            session_manager.update_session(session_id, {
+                "job_fetch_status": "error",
+                "job_fetch_error": fetch_result.get("error", "Unknown error")
+            })
             return
         
-        sessions[session_id]["jobs_file"] = f"jobs_{session_id}.json"
-        sessions[session_id]["job_fetch_status"] = "populating"
+        session_manager.update_session(session_id, {
+            "jobs_file": f"jobs_{session_id}.json",
+            "job_fetch_status": "populating"
+        })
         
         # Step 2: Populate MongoDB
         populate_result = await call_mcp_tool("populate_mongodb", {
@@ -99,18 +150,24 @@ async def background_job_fetching(session_id: str, job_count: int = 50):
         })
         
         if populate_result.get("status") == "success":
-            sessions[session_id]["job_fetch_status"] = "completed"
-            sessions[session_id]["total_jobs"] = populate_result.get("total_jobs", 0)
+            session_manager.update_session(session_id, {
+                "job_fetch_status": "completed",
+                "total_jobs": populate_result.get("total_jobs", 0)
+            })
             logger.info(f"[{session_id}] Background job fetching completed")
         else:
-            sessions[session_id]["job_fetch_status"] = "completed_no_mongo"
-            sessions[session_id]["total_jobs"] = fetch_result.get("fetched", 0)
+            session_manager.update_session(session_id, {
+                "job_fetch_status": "completed_no_mongo",
+                "total_jobs": fetch_result.get("fetched", 0)
+            })
             logger.info(f"[{session_id}] Jobs fetched but MongoDB population failed")
         
     except Exception as e:
         logger.exception(f"[{session_id}] Error in background job fetching: {e}")
-        sessions[session_id]["job_fetch_status"] = "error"
-        sessions[session_id]["job_fetch_error"] = str(e)
+        session_manager.update_session(session_id, {
+            "job_fetch_status": "error",
+            "job_fetch_error": str(e)
+        })
 
 # HTML Frontend
 HTML_TEMPLATE = """
@@ -894,12 +951,13 @@ async def upload_resume(resume: UploadFile = File(...), background_tasks: Backgr
     """
     # Create session
     session_id = str(uuid.uuid4())
-    sessions[session_id] = {
+    session_manager.update_session(session_id, {
+        "session_id": session_id,
         "created_at": datetime.now(),
         "job_fetch_status": "pending",
         "resume_status": "parsing",
         "agent_status": "initializing"
-    }
+    })
     
     # Save uploaded file
     temp_path = Path(f"temp_{session_id}_{resume.filename}")
@@ -907,7 +965,7 @@ async def upload_resume(resume: UploadFile = File(...), background_tasks: Backgr
         with open(temp_path, "wb") as f:
             f.write(await resume.read())
         
-        sessions[session_id]["resume_path"] = str(temp_path.absolute())
+        session_manager.update_session(session_id, {"resume_path": str(temp_path.absolute())})
         
         # Start intelligent agent workflow in background
         logger.info(f"[{session_id}] Starting intelligent agent workflow")
@@ -929,9 +987,11 @@ async def upload_resume(resume: UploadFile = File(...), background_tasks: Backgr
 async def run_agent_workflow(session_id: str, resume_path: str):
     """Run the intelligent agent workflow."""
     try:
-        sessions[session_id]["agent_status"] = "running"
-        sessions[session_id]["resume_status"] = "parsing"
-        sessions[session_id]["job_fetch_status"] = "fetching"
+        session_manager.update_session(session_id, {
+            "agent_status": "running",
+            "resume_status": "parsing",
+            "job_fetch_status": "fetching"
+        })
         
         logger.info(f"[{session_id}] Agent starting job search workflow")
         
@@ -947,24 +1007,30 @@ async def run_agent_workflow(session_id: str, resume_path: str):
             
             if result["status"] == "success":
                 # Update session with results
-                sessions[session_id]["agent_status"] = "completed"
-                sessions[session_id]["resume_status"] = "completed"
-                sessions[session_id]["job_fetch_status"] = "completed"
-                sessions[session_id]["parsed_resume"] = result["candidate"]
-                sessions[session_id]["matches"] = result["job_search"]["matches"]
-                sessions[session_id]["total_jobs"] = result["job_search"]["total_jobs_fetched"]
-                sessions[session_id]["agent_reasoning"] = result["agent_reasoning"]
+                session_manager.update_session(session_id, {
+                    "agent_status": "completed",
+                    "resume_status": "completed",
+                    "job_fetch_status": "completed",
+                    "parsed_resume": result["candidate"],
+                    "matches": result["job_search"]["matches"],
+                    "total_jobs": result["job_search"]["total_jobs_fetched"],
+                    "agent_reasoning": result["agent_reasoning"]
+                })
                 
                 logger.info(f"[{session_id}] Agent workflow completed successfully")
             else:
-                sessions[session_id]["agent_status"] = "error"
-                sessions[session_id]["agent_error"] = result.get("reason", "Unknown error")
+                session_manager.update_session(session_id, {
+                    "agent_status": "error",
+                    "agent_error": result.get("reason", "Unknown error")
+                })
                 logger.error(f"[{session_id}] Agent workflow failed: {result.get('reason')}")
                 
     except Exception as e:
         logger.exception(f"[{session_id}] Error in agent workflow: {e}")
-        sessions[session_id]["agent_status"] = "error"
-        sessions[session_id]["agent_error"] = str(e)
+        session_manager.update_session(session_id, {
+            "agent_status": "error",
+            "agent_error": str(e)
+        })
     finally:
         # Clean up temp file
         temp_path = Path(resume_path)
@@ -977,10 +1043,9 @@ async def run_agent_workflow(session_id: str, resume_path: str):
 @app.get("/api/status/{session_id}")
 async def get_status(session_id: str):
     """Get the current status of the agent workflow."""
-    if session_id not in sessions:
+    session = session_manager.get_session(session_id)
+    if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
-    session = sessions[session_id]
     
     # If agent completed, return parsed resume info
     parsed_resume = None
@@ -1009,10 +1074,10 @@ async def match_jobs(session_id: str, request: Request):
     Return the matches that were already computed by the agent.
     The agent handles all matching logic autonomously.
     """
-    if session_id not in sessions:
+    session = session_manager.get_session(session_id)
+    if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    session = sessions[session_id]
     matches = session.get("matches", [])
     
     if not matches:
@@ -1034,10 +1099,10 @@ async def match_jobs(session_id: str, request: Request):
 @app.post("/api/generate-cover-letter/{session_id}")
 async def generate_cover_letter_endpoint(session_id: str, request: Request):
     """Generate cover letter for a specific job using Ollama LLM."""
-    if session_id not in sessions:
+    session = session_manager.get_session(session_id)
+    if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    session = sessions[session_id]
     parsed_resume = session.get("parsed_resume")
     
     if not parsed_resume:
@@ -1086,13 +1151,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     
     try:
         while True:
-            if session_id not in sessions:
+            session = session_manager.get_session(session_id)
+            if not session:
                 await websocket.send_json({
                     "error": "Session not found"
                 })
                 break
-            
-            session = sessions[session_id]
             
             # Send current status
             parsed_resume = None
