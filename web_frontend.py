@@ -17,9 +17,59 @@ import asyncio
 import json
 import sys
 import logging
+import os
 from typing import Dict, Any, Optional
 from datetime import datetime
 import uuid
+import pymongo
+from urllib.parse import quote_plus
+
+# MongoDB configuration
+MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
+if os.getenv("MONGO_PASS") and "<db_password>" in MONGO_URL:
+    MONGO_URL = MONGO_URL.replace("<db_password>", quote_plus(os.getenv("MONGO_PASS", "")))
+
+class MongoSessionManager:
+    """Manages session persistence in MongoDB."""
+    def __init__(self, mongo_url: str):
+        try:
+            self.client = pymongo.MongoClient(mongo_url, serverSelectionTimeoutMS=5000)
+            self.client.admin.command("ping")
+            self.db = self.client["careercraft"]
+            self.collection = self.db["sessions"]
+            self.collection.create_index("session_id", unique=True)
+            self.enabled = True
+            logging.info("Connected to MongoDB for session storage")
+        except Exception as e:
+            logging.error(f"Failed to connect to MongoDB for sessions: {e}")
+            self.enabled = False
+            self.fallback_sessions = {}
+
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        if self.enabled:
+            return self.collection.find_one({"session_id": session_id})
+        return self.fallback_sessions.get(session_id)
+
+    def update_session(self, session_id: str, updates: Dict[str, Any]):
+        if self.enabled:
+            self.collection.update_one(
+                {"session_id": session_id},
+                {"$set": updates},
+                upsert=True
+            )
+        else:
+            if session_id not in self.fallback_sessions:
+                self.fallback_sessions[session_id] = {}
+            self.fallback_sessions[session_id].update(updates)
+
+    def delete_session(self, session_id: str):
+        if self.enabled:
+            self.collection.delete_one({"session_id": session_id})
+        else:
+            self.fallback_sessions.pop(session_id, None)
+
+# Initialize session manager
+session_manager = MongoSessionManager(MONGO_URL)
 
 # Add project root
 project_root = Path(__file__).resolve().parent
@@ -42,9 +92,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# In-memory storage for session state
-sessions: Dict[str, Dict[str, Any]] = {}
 
 # MCP server URL
 MCP_SERVER_URL = "http://127.0.0.1:8002/mcp"
@@ -77,7 +124,7 @@ async def background_job_fetching(session_id: str, job_count: int = 50):
     
     try:
         # Update session status
-        sessions[session_id]["job_fetch_status"] = "fetching"
+        session_manager.update_session(session_id, {"job_fetch_status": "fetching"})
         
         # Step 1: Fetch jobs
         fetch_result = await call_mcp_tool("fetch_job_data", {
@@ -86,12 +133,16 @@ async def background_job_fetching(session_id: str, job_count: int = 50):
         })
         
         if fetch_result.get("status") != "success":
-            sessions[session_id]["job_fetch_status"] = "error"
-            sessions[session_id]["job_fetch_error"] = fetch_result.get("error", "Unknown error")
+            session_manager.update_session(session_id, {
+                "job_fetch_status": "error",
+                "job_fetch_error": fetch_result.get("error", "Unknown error")
+            })
             return
         
-        sessions[session_id]["jobs_file"] = f"jobs_{session_id}.json"
-        sessions[session_id]["job_fetch_status"] = "populating"
+        session_manager.update_session(session_id, {
+            "jobs_file": f"jobs_{session_id}.json",
+            "job_fetch_status": "populating"
+        })
         
         # Step 2: Populate MongoDB
         populate_result = await call_mcp_tool("populate_mongodb", {
@@ -99,18 +150,24 @@ async def background_job_fetching(session_id: str, job_count: int = 50):
         })
         
         if populate_result.get("status") == "success":
-            sessions[session_id]["job_fetch_status"] = "completed"
-            sessions[session_id]["total_jobs"] = populate_result.get("total_jobs", 0)
+            session_manager.update_session(session_id, {
+                "job_fetch_status": "completed",
+                "total_jobs": populate_result.get("total_jobs", 0)
+            })
             logger.info(f"[{session_id}] Background job fetching completed")
         else:
-            sessions[session_id]["job_fetch_status"] = "completed_no_mongo"
-            sessions[session_id]["total_jobs"] = fetch_result.get("fetched", 0)
+            session_manager.update_session(session_id, {
+                "job_fetch_status": "completed_no_mongo",
+                "total_jobs": fetch_result.get("fetched", 0)
+            })
             logger.info(f"[{session_id}] Jobs fetched but MongoDB population failed")
         
     except Exception as e:
         logger.exception(f"[{session_id}] Error in background job fetching: {e}")
-        sessions[session_id]["job_fetch_status"] = "error"
-        sessions[session_id]["job_fetch_error"] = str(e)
+        session_manager.update_session(session_id, {
+            "job_fetch_status": "error",
+            "job_fetch_error": str(e)
+        })
 
 # HTML Frontend
 HTML_TEMPLATE = """
@@ -503,6 +560,32 @@ HTML_TEMPLATE = """
                 </div>
             </div>
         </div>
+
+        <!-- Agent Insights Section -->
+        <div class="card hidden" id="insightsCard">
+            <h2>💡 AI Agent Analysis</h2>
+            <div class="info-grid" style="margin-top: 20px;">
+                <div class="info-item" style="border-left-color: #764ba2;">
+                    <div class="info-label">Experience Level</div>
+                    <div class="info-value" id="insightExpLevel">-</div>
+                </div>
+                <div class="info-item" style="border-left-color: #764ba2;">
+                    <div class="info-label">Career Stage</div>
+                    <div class="info-value" id="insightCareerStage" style="font-size: 1.1em;">-</div>
+                </div>
+            </div>
+            
+            <div style="margin-top: 20px; padding: 15px; background: #f8f9ff; border-radius: 8px;">
+                <h4 style="color: #667eea; margin-bottom: 10px;">🧠 Agent's Matching Strategy</h4>
+                <p id="insightStrategy" style="color: #4b5563; font-style: italic;"></p>
+            </div>
+            
+            <div id="matchInsightsSection" style="margin-top: 20px; padding: 15px; background: #f0fdf4; border-radius: 8px; border-left: 4px solid #22c55e;">
+                <h4 style="color: #166534; margin-bottom: 10px;">🎯 Recommendation Insights</h4>
+                <div id="insightBestMatch" style="margin-bottom: 8px; font-weight: 600;"></div>
+                <div id="insightAssessment" style="color: #374151;"></div>
+            </div>
+        </div>
         
         <!-- Step 3: Job Recommendations -->
         <div class="card hidden" id="jobsCard">
@@ -526,9 +609,29 @@ HTML_TEMPLATE = """
                 <div id="modalJobDescription" class="job-description"></div>
             </div>
             
-            <div style="margin: 20px 0;">
-                <button class="btn" onclick="generateCoverLetter()" id="generateBtn">
-                    ✨ Generate Cover Letter
+            <div style="margin: 20px 0; padding: 20px; background: #f8f9ff; border-radius: 12px; border: 1px solid #e0e7ff;">
+                <h3 style="margin-bottom: 15px; color: #4338ca;">✨ Customize Your Cover Letter</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+                    <div>
+                        <label style="display: block; font-size: 0.9em; font-weight: 600; color: #4b5563; margin-bottom: 8px;">Desired Tone</label>
+                        <select id="letterTone" style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #d1d5db; background: white; font-size: 14px;">
+                            <option value="professional">Professional (Balanced)</option>
+                            <option value="enthusiastic">Enthusiastic (Passionate)</option>
+                            <option value="concise">Concise (Direct)</option>
+                            <option value="academic">Academic (Formal)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="display: block; font-size: 0.9em; font-weight: 600; color: #4b5563; margin-bottom: 8px;">Desired Length</label>
+                        <select id="letterLength" style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #d1d5db; background: white; font-size: 14px;">
+                            <option value="short">Short (~200 words)</option>
+                            <option value="medium" selected>Medium (~400 words)</option>
+                            <option value="long">Long (~600 words)</option>
+                        </select>
+                    </div>
+                </div>
+                <button class="btn" onclick="generateCoverLetter()" id="generateBtn" style="width: 100%; padding: 15px; font-size: 1.1em;">
+                    ✨ Generate Tailored Cover Letter
                 </button>
             </div>
             
@@ -706,6 +809,9 @@ HTML_TEMPLATE = """
                     updateStatus('matchStatus', 'Completed', 'completed');
                     matchedJobs = result.matches;
                     displayJobs(result.matches);
+                    if (result.agent_reasoning) {
+                        displayInsights(result.agent_reasoning);
+                    }
                 } else {
                     updateStatus('matchStatus', 'Error', 'error');
                     alert('Failed to match jobs: ' + result.error);
@@ -714,6 +820,21 @@ HTML_TEMPLATE = """
                 updateStatus('matchStatus', 'Error', 'error');
                 alert('Error matching jobs: ' + error.message);
             }
+        }
+        
+        function displayInsights(reasoning) {
+            document.getElementById('insightsCard').classList.remove('hidden');
+            
+            const analysis = reasoning.candidate_analysis || {};
+            document.getElementById('insightExpLevel').textContent = analysis.experience_level || 'Unknown';
+            document.getElementById('insightCareerStage').textContent = analysis.career_stage || 'N/A';
+            
+            const params = reasoning.search_parameters || {};
+            document.getElementById('insightStrategy').textContent = params.reasoning || 'No specific strategy provided.';
+            
+            const insights = reasoning.match_insights || {};
+            document.getElementById('insightBestMatch').textContent = '💡 ' + (insights.best_match || 'Best fit analysis pending...');
+            document.getElementById('insightAssessment').textContent = insights.overall_assessment || 'Overall assessment pending...';
         }
         
         function displayJobs(jobs) {
@@ -793,6 +914,9 @@ HTML_TEMPLATE = """
         
         async function generateCoverLetter() {
             const btn = document.getElementById('generateBtn');
+            const tone = document.getElementById('letterTone').value;
+            const length = document.getElementById('letterLength').value;
+            
             btn.disabled = true;
             btn.innerHTML = '<span class="loading-spinner"></span> Generating with AI...';
             
@@ -803,7 +927,7 @@ HTML_TEMPLATE = """
                 <div style="text-align: center; padding: 40px; color: #667eea;">
                     <div class="loading-spinner" style="width: 40px; height: 40px; margin: 0 auto 20px;"></div>
                     <p style="font-size: 1.1em; margin: 10px 0;"><strong>🤖 AI is crafting your cover letter...</strong></p>
-                    <p style="color: #6b7280; font-size: 0.9em;">Using Ollama Llama 3.2 to analyze your resume and the job description</p>
+                    <p style="color: #6b7280; font-size: 0.9em;">Using Ollama Llama 3.2 with <b>${tone}</b> tone and <b>${length}</b> length</p>
                     <p style="color: #9ca3af; font-size: 0.85em; margin-top: 15px;">This typically takes 10-30 seconds</p>
                 </div>
             `;
@@ -812,7 +936,11 @@ HTML_TEMPLATE = """
                 const response = await fetch('/api/generate-cover-letter/' + sessionId, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({job: currentJob})
+                    body: JSON.stringify({
+                        job: currentJob,
+                        tone: tone,
+                        length: length
+                    })
                 });
                 
                 const result = await response.json();
@@ -833,7 +961,7 @@ HTML_TEMPLATE = """
                     `;
                     alert('Failed to generate cover letter: ' + result.error);
                     btn.disabled = false;
-                    btn.innerHTML = '✨ Generate Cover Letter';
+                    btn.innerHTML = '✨ Generate Tailored Cover Letter';
                     coverLetterSection.classList.add('hidden');
                 }
             } catch (error) {
@@ -845,7 +973,7 @@ HTML_TEMPLATE = """
                 `;
                 alert('Error generating cover letter: ' + error.message);
                 btn.disabled = false;
-                btn.innerHTML = '✨ Generate Cover Letter';
+                btn.innerHTML = '✨ Generate Tailored Cover Letter';
             }
         }
         
@@ -894,12 +1022,13 @@ async def upload_resume(resume: UploadFile = File(...), background_tasks: Backgr
     """
     # Create session
     session_id = str(uuid.uuid4())
-    sessions[session_id] = {
+    session_manager.update_session(session_id, {
+        "session_id": session_id,
         "created_at": datetime.now(),
         "job_fetch_status": "pending",
         "resume_status": "parsing",
         "agent_status": "initializing"
-    }
+    })
     
     # Save uploaded file
     temp_path = Path(f"temp_{session_id}_{resume.filename}")
@@ -907,7 +1036,7 @@ async def upload_resume(resume: UploadFile = File(...), background_tasks: Backgr
         with open(temp_path, "wb") as f:
             f.write(await resume.read())
         
-        sessions[session_id]["resume_path"] = str(temp_path.absolute())
+        session_manager.update_session(session_id, {"resume_path": str(temp_path.absolute())})
         
         # Start intelligent agent workflow in background
         logger.info(f"[{session_id}] Starting intelligent agent workflow")
@@ -929,9 +1058,11 @@ async def upload_resume(resume: UploadFile = File(...), background_tasks: Backgr
 async def run_agent_workflow(session_id: str, resume_path: str):
     """Run the intelligent agent workflow."""
     try:
-        sessions[session_id]["agent_status"] = "running"
-        sessions[session_id]["resume_status"] = "parsing"
-        sessions[session_id]["job_fetch_status"] = "fetching"
+        session_manager.update_session(session_id, {
+            "agent_status": "running",
+            "resume_status": "parsing",
+            "job_fetch_status": "fetching"
+        })
         
         logger.info(f"[{session_id}] Agent starting job search workflow")
         
@@ -947,24 +1078,30 @@ async def run_agent_workflow(session_id: str, resume_path: str):
             
             if result["status"] == "success":
                 # Update session with results
-                sessions[session_id]["agent_status"] = "completed"
-                sessions[session_id]["resume_status"] = "completed"
-                sessions[session_id]["job_fetch_status"] = "completed"
-                sessions[session_id]["parsed_resume"] = result["candidate"]
-                sessions[session_id]["matches"] = result["job_search"]["matches"]
-                sessions[session_id]["total_jobs"] = result["job_search"]["total_jobs_fetched"]
-                sessions[session_id]["agent_reasoning"] = result["agent_reasoning"]
+                session_manager.update_session(session_id, {
+                    "agent_status": "completed",
+                    "resume_status": "completed",
+                    "job_fetch_status": "completed",
+                    "parsed_resume": result["candidate"],
+                    "matches": result["job_search"]["matches"],
+                    "total_jobs": result["job_search"]["total_jobs_fetched"],
+                    "agent_reasoning": result["agent_reasoning"]
+                })
                 
                 logger.info(f"[{session_id}] Agent workflow completed successfully")
             else:
-                sessions[session_id]["agent_status"] = "error"
-                sessions[session_id]["agent_error"] = result.get("reason", "Unknown error")
+                session_manager.update_session(session_id, {
+                    "agent_status": "error",
+                    "agent_error": result.get("reason", "Unknown error")
+                })
                 logger.error(f"[{session_id}] Agent workflow failed: {result.get('reason')}")
                 
     except Exception as e:
         logger.exception(f"[{session_id}] Error in agent workflow: {e}")
-        sessions[session_id]["agent_status"] = "error"
-        sessions[session_id]["agent_error"] = str(e)
+        session_manager.update_session(session_id, {
+            "agent_status": "error",
+            "agent_error": str(e)
+        })
     finally:
         # Clean up temp file
         temp_path = Path(resume_path)
@@ -977,10 +1114,9 @@ async def run_agent_workflow(session_id: str, resume_path: str):
 @app.get("/api/status/{session_id}")
 async def get_status(session_id: str):
     """Get the current status of the agent workflow."""
-    if session_id not in sessions:
+    session = session_manager.get_session(session_id)
+    if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
-    session = sessions[session_id]
     
     # If agent completed, return parsed resume info
     parsed_resume = None
@@ -1009,10 +1145,10 @@ async def match_jobs(session_id: str, request: Request):
     Return the matches that were already computed by the agent.
     The agent handles all matching logic autonomously.
     """
-    if session_id not in sessions:
+    session = session_manager.get_session(session_id)
+    if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    session = sessions[session_id]
     matches = session.get("matches", [])
     
     if not matches:
@@ -1034,10 +1170,10 @@ async def match_jobs(session_id: str, request: Request):
 @app.post("/api/generate-cover-letter/{session_id}")
 async def generate_cover_letter_endpoint(session_id: str, request: Request):
     """Generate cover letter for a specific job using Ollama LLM."""
-    if session_id not in sessions:
+    session = session_manager.get_session(session_id)
+    if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    session = sessions[session_id]
     parsed_resume = session.get("parsed_resume")
     
     if not parsed_resume:
@@ -1048,12 +1184,13 @@ async def generate_cover_letter_endpoint(session_id: str, request: Request):
     
     data = await request.json()
     job = data.get("job")
+    tone = data.get("tone", "professional")
+    length = data.get("length", "medium")
     
     job_title = job.get("jobTitle") or job.get("title") or "Unknown"
     company = job.get("companyName") or job.get("company") or "Unknown"
     
-    logger.info(f"[{session_id}] Generating cover letter for {job_title} at {company} using Ollama Llama 3.2")
-    logger.info(f"[{session_id}] This may take 10-30 seconds...")
+    logger.info(f"[{session_id}] Generating cover letter for {job_title} at {company} (Tone: {tone}, Length: {length})")
     
     import time
     start_time = time.time()
@@ -1061,7 +1198,9 @@ async def generate_cover_letter_endpoint(session_id: str, request: Request):
     # Call cover letter generation tool (this will use Ollama)
     result = await call_mcp_tool("create_cover_letter", {
         "resume": parsed_resume,
-        "job": job
+        "job": job,
+        "tone": tone,
+        "length": length
     })
     
     elapsed = time.time() - start_time
@@ -1086,13 +1225,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     
     try:
         while True:
-            if session_id not in sessions:
+            session = session_manager.get_session(session_id)
+            if not session:
                 await websocket.send_json({
                     "error": "Session not found"
                 })
                 break
-            
-            session = sessions[session_id]
             
             # Send current status
             parsed_resume = None

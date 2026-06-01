@@ -160,6 +160,8 @@ def generate_cover_letter(
     *,
     model_name: str = "llama3.2:1b",
     temperature: float = 0.7,
+    tone: str = "professional",
+    length: str = "medium",
 ) -> str:
     """
     Generate a personalized cover letter using a local Ollama model via LangChain.
@@ -167,10 +169,27 @@ def generate_cover_letter(
 
     resume: dict from parse_resume_file(...)
     job: dict from your job source / queue
+    tone: "professional", "enthusiastic", "concise", or "academic"
+    length: "short", "medium", or "long"
     """
 
     resume_str = _format_resume_for_prompt(resume)
     job_str = _format_job_for_prompt(job)
+
+    # Tone-specific instructions
+    tone_instructions = {
+        "professional": "Maintain a standard, respectful, and balanced professional tone.",
+        "enthusiastic": "Use a highly passionate and energetic tone, showing extreme excitement for the company and role.",
+        "concise": "Be very direct and to the point. Avoid fluff and keep every sentence high-impact.",
+        "academic": "Use a formal academic tone, emphasizing research, education, and theoretical foundations."
+    }.get(tone, "Maintain a professional tone.")
+
+    # Length-specific instructions
+    length_instructions = {
+        "short": "Write a short cover letter (1-2 paragraphs, max 200 words).",
+        "medium": "Write a standard length cover letter (3-4 paragraphs, around 400 words).",
+        "long": "Write a detailed cover letter (4-5 paragraphs, around 600 words)."
+    }.get(length, "Write a standard length cover letter.")
 
     # --- Upgraded System Prompt ---
     system_prompt = (
@@ -178,6 +197,8 @@ def generate_cover_letter(
         "Your job is to write a professional, human-sounding cover letter that is based "
         "on the candidate's resume and the job description, but NOT a literal restatement "
         "of the resume.\n\n"
+        f"TONE AND STYLE: {tone_instructions}\n"
+        f"LENGTH: {length_instructions}\n\n"
         "Key requirements:\n"
         "1. Identify 2–3 core themes in the candidate's background (e.g., research ability, "
         "   engineering rigor, quantitative analysis, collaboration, ownership).\n"
@@ -189,7 +210,7 @@ def generate_cover_letter(
         "5. Use strong transitions and narrative flow; avoid repetitive sentence openings like "
         "   'As a ...' for each role.\n"
         "6. Integrate only the most relevant skills, rather than dumping the full skill list.\n"
-        "7. Write 3–4 paragraphs, concise but substantive.\n"
+        f"7. {length_instructions}\n"
         "8. If no hiring manager name is provided, begin with a greeting like "
         "   'Dear [Company] Recruitment Team,' or 'Dear Hiring Manager,'.\n"
         "9. Do not include the candidate's email, phone, or LinkedIn inside the letter body.\n"
@@ -201,12 +222,11 @@ def generate_cover_letter(
         "    excited about this company and this role, not just generic enthusiasm.\n"
         "13. Never invent company facts that are not clearly implied or stated in the job description; "
         "    if the description is generic, keep the company-fit paragraph appropriately general.\n"
-)
-
+    )
 
     # --- Upgraded Human Prompt ---
     human_prompt = (
-        "Write a tailored cover letter for the following role using the candidate's background.\n\n"
+        f"Write a tailored cover letter with a {tone} tone and {length} length for the following role using the candidate's background.\n\n"
         "Do NOT copy the resume directly. Instead, paraphrase and generalize the experience "
         "into smooth narrative paragraphs. Focus on how the candidate's experience and skills "
         "make them a strong fit for THIS specific job.\n\n"
@@ -217,7 +237,7 @@ def generate_cover_letter(
         "Instructions:\n"
         "- Emphasize relevant experience, projects, and skills for this job.\n"
         "- Connect past work to the responsibilities and tech stack of the role.\n"
-        "- Use a confident but modest tone; avoid exaggeration.\n"
+        f"- {tone_instructions}\n"
         "- End with a short, clear call to action about next steps (e.g., willingness to interview).\n"
     )
 
