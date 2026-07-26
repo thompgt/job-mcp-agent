@@ -10,9 +10,9 @@ MCP job application pipeline server. It exposes web-friendly endpoints for:
 
 Run with: uvicorn server.api_frontend:app --host 0.0.0.0 --port 8000
 """
-import io
 from __future__ import annotations
 
+import io
 import sys
 from pathlib import Path
 from typing import Optional, Dict, Any, List
