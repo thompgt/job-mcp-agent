@@ -18,6 +18,17 @@ from datetime import datetime
 
 from fastmcp import Client
 import ollama
+import os
+
+# Ollama daemon location. Defaults to loopback IPv4 rather than "localhost",
+# because hosts that resolve localhost to ::1 first can reach a different
+# Ollama instance than the CLI does. Override with OLLAMA_BASE_URL (or the
+# OLLAMA_HOST variable the official client already understands) when Ollama
+# runs on another host, e.g. from inside a container.
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_HOST") or "http://127.0.0.1:11434"
+
+# One shared client so every reasoning call in this module targets the same daemon.
+ollama_client = ollama.Client(host=OLLAMA_BASE_URL)
 
 # Configure logging
 logging.basicConfig(
@@ -303,7 +314,7 @@ Based on this information, provide a JSON response with:
 Respond ONLY with valid JSON, no additional text."""
 
         try:
-            response = ollama.generate(
+            response = ollama_client.generate(
                 model=self.model_name,
                 prompt=prompt,
                 options={"temperature": 0.3}
@@ -376,7 +387,7 @@ Respond ONLY with valid JSON:
 }}"""
 
         try:
-            response = ollama.generate(
+            response = ollama_client.generate(
                 model=self.model_name,
                 prompt=prompt,
                 options={"temperature": 0.3}
@@ -471,7 +482,7 @@ Keep it concise (3-4 sentences total). Respond ONLY with valid JSON:
 }}"""
 
         try:
-            response = ollama.generate(
+            response = ollama_client.generate(
                 model=self.model_name,
                 prompt=prompt,
                 options={"temperature": 0.4}

@@ -21,6 +21,11 @@ services:
     environment:
       - MONGO_HOST=mongo
       - MONGO_PORT=27017
+      # Ollama runs on the host, not in the compose network.
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    extra_hosts:
+      # host.docker.internal is built in on Docker Desktop; Linux needs this.
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./:/app
     healthcheck:
@@ -38,6 +43,12 @@ services:
       - "8000:8000"
     depends_on:
       - api
+    environment:
+      - MONGO_HOST=mongo
+      - MONGO_PORT=27017
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./:/app
 

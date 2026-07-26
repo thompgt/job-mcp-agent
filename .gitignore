@@ -26,3 +26,7 @@ jobs.json
 .pkl
 *.pdf
 *.docx
+# macOS junk
+.DS_Store
+**/.DS_Store
+Thumbs.db

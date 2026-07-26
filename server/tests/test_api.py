@@ -7,7 +7,8 @@ from server.app.main import app
 client = TestClient(app)
 
 
-def fake_fetch_jobs():
+def fake_fetch_jobs(count: int = 100, out_path=None):
+    # Signature must accept the kwargs MCPController.ingest() passes through.
     return [
         {"title": "SWE Intern", "companyName": "Acme", "location": "Remote"},
         {"title": "Data Analyst", "companyName": "Beta", "location": "NYC"},
@@ -34,7 +35,11 @@ def test_ingest_and_list(monkeypatch):
 def test_claim_and_complete(monkeypatch):
     import server.app.controllers.mcp_controller as mc
 
-    monkeypatch.setattr(mc, "fetch_jobs", lambda: [{"title": "Test", "companyName": "Co", "location": "X"}])
+    monkeypatch.setattr(
+        mc,
+        "fetch_jobs",
+        lambda *a, **kw: [{"title": "Test", "companyName": "Co", "location": "X"}],
+    )
 
     r = client.post("/api/ingest")
     assert r.status_code == 200

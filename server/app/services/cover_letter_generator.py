@@ -1,7 +1,15 @@
 # server/app/services/cover_letter_generator.py
 
 from __future__ import annotations
+
+import os
 from typing import Dict, Any, Optional
+
+# Where the Ollama daemon lives. Defaults to the loopback IPv4 address rather
+# than "localhost", because on hosts that resolve localhost to ::1 first this
+# can reach a different Ollama instance than the CLI does. Override with
+# OLLAMA_BASE_URL when Ollama runs on another host (e.g. from a container).
+DEFAULT_OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 
 # LangChain + Ollama
 try:
@@ -162,6 +170,7 @@ def generate_cover_letter(
     temperature: float = 0.7,
     tone: str = "professional",
     length: str = "medium",
+    base_url: Optional[str] = None,
 ) -> str:
     """
     Generate a personalized cover letter using a local Ollama model via LangChain.
@@ -171,6 +180,8 @@ def generate_cover_letter(
     job: dict from your job source / queue
     tone: "professional", "enthusiastic", "concise", or "academic"
     length: "short", "medium", or "long"
+    base_url: Ollama daemon URL. Defaults to OLLAMA_BASE_URL, else
+        http://127.0.0.1:11434.
     """
 
     resume_str = _format_resume_for_prompt(resume)
@@ -246,11 +257,16 @@ def generate_cover_letter(
         try:
             import logging
             logger = logging.getLogger(__name__)
-            logger.info(f"Generating cover letter with Ollama model: {model_name}")
-            
+            resolved_base_url = base_url or DEFAULT_OLLAMA_BASE_URL
+            logger.info(
+                f"Generating cover letter with Ollama model {model_name} "
+                f"at {resolved_base_url}"
+            )
+
             llm = ChatOllama(
                 model=model_name,
                 temperature=temperature,
+                base_url=resolved_base_url,
             )
 
             messages = [
@@ -275,7 +291,10 @@ def generate_cover_letter(
             logger.error(f"Ollama generation FAILED: {e}")
             raise RuntimeError(
                 f"Cover letter generation failed. Ollama error: {str(e)}. "
-                f"Make sure Ollama is running (ollama serve) and model '{model_name}' is installed (ollama pull {model_name})"
+                f"Tried {base_url or DEFAULT_OLLAMA_BASE_URL}. Make sure Ollama is "
+                f"running (ollama serve), that model '{model_name}' is installed "
+                f"(ollama pull {model_name}), and that OLLAMA_BASE_URL points at "
+                f"the right daemon."
             ) from e
     else:
         # ChatOllama not available - fail immediately
