@@ -70,6 +70,30 @@ class JobicyProvider(JobProvider):
         self._base_url = base_url
         self._timeout = timeout
         self._client = client
+        self._owned: httpx.AsyncClient | None = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        """Reuse one client for the provider's lifetime.
+
+        Constructing an ``AsyncClient`` loads a TLS trust store, which costs
+        the better part of a second on Windows. Per-search construction made
+        every job search pay it, and it is the provider's own connection pool
+        that we want to keep warm anyway.
+        """
+        if self._client is not None:
+            return self._client
+        if self._owned is None or self._owned.is_closed:
+            self._owned = httpx.AsyncClient(
+                timeout=self._timeout,
+                follow_redirects=True,
+                headers={"User-Agent": "careercraft-mcp"},
+            )
+        return self._owned
+
+    async def aclose(self) -> None:
+        if self._owned is not None and not self._owned.is_closed:
+            await self._owned.aclose()
+        self._owned = None
 
     async def search(self, query: JobQuery) -> list[Job]:
         params: dict[str, Any] = {"count": max(_MIN_COUNT, min(_MAX_COUNT, query.limit))}
@@ -79,15 +103,7 @@ class JobicyProvider(JobProvider):
             params["geo"] = query.location.lower().replace(" ", "-")
 
         try:
-            if self._client is not None:
-                response = await self._client.get(self._base_url, params=params)
-            else:
-                async with httpx.AsyncClient(
-                    timeout=self._timeout,
-                    follow_redirects=True,
-                    headers={"User-Agent": "careercraft-mcp"},
-                ) as client:
-                    response = await client.get(self._base_url, params=params)
+            response = await self._get_client().get(self._base_url, params=params)
             response.raise_for_status()
             payload = response.json()
         except httpx.HTTPStatusError as exc:

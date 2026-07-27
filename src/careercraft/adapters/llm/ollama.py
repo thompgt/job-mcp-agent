@@ -39,20 +39,32 @@ class OllamaProvider:
         self.model = model
         self.timeout = timeout
         self._client = client
+        self._owned: httpx.AsyncClient | None = None
 
-    def _make_client(self, timeout: float) -> httpx.AsyncClient:
-        return self._client or httpx.AsyncClient(timeout=timeout)
+    def _get_client(self) -> httpx.AsyncClient:
+        """One client for the provider's lifetime, reused across calls.
+
+        The per-call timeout differs enormously — two seconds for the
+        availability probe, three minutes for generation — so it is passed per
+        request rather than baked into the client.
+        """
+        if self._client is not None:
+            return self._client
+        if self._owned is None or self._owned.is_closed:
+            self._owned = httpx.AsyncClient(timeout=self.timeout)
+        return self._owned
+
+    async def aclose(self) -> None:
+        if self._owned is not None and not self._owned.is_closed:
+            await self._owned.aclose()
+        self._owned = None
 
     async def _request(self, method: str, path: str, timeout: float, **kwargs: Any) -> Any:
-        client = self._make_client(timeout)
-        owns = self._client is None
-        try:
-            response = await client.request(method, f"{self.base_url}{path}", **kwargs)
-            response.raise_for_status()
-            return response
-        finally:
-            if owns:
-                await client.aclose()
+        response = await self._get_client().request(
+            method, f"{self.base_url}{path}", timeout=timeout, **kwargs
+        )
+        response.raise_for_status()
+        return response
 
     async def is_available(self) -> bool:
         """True when the daemon answers. Never raises."""
@@ -135,11 +147,9 @@ class OllamaProvider:
         if max_tokens is not None:
             body["options"]["num_predict"] = max_tokens
 
-        client = self._make_client(self.timeout)
-        owns = self._client is None
         try:
-            async with client.stream(
-                "POST", f"{self.base_url}/api/chat", json=body
+            async with self._get_client().stream(
+                "POST", f"{self.base_url}/api/chat", json=body, timeout=self.timeout
             ) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
@@ -156,6 +166,3 @@ class OllamaProvider:
                         break
         except httpx.HTTPError as exc:
             raise self._unreachable(exc) from exc
-        finally:
-            if owns:
-                await client.aclose()

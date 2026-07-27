@@ -84,6 +84,22 @@ class CareerCraftService:
         self.settings.ensure_dirs()
         await self.store.initialize()
 
+    async def shutdown(self) -> None:
+        """Release the providers' connection pools.
+
+        Both HTTP providers keep one client alive for their lifetime rather
+        than building a fresh one per call — constructing an ``AsyncClient``
+        loads a TLS trust store, which is close to a second on Windows. That
+        makes closing them our job.
+        """
+        for provider in (self.jobs, self.llm):
+            closer = getattr(provider, "aclose", None)
+            if closer is not None:
+                try:
+                    await closer()
+                except Exception:  # noqa: BLE001 - shutdown must not raise
+                    log.debug("shutdown.close_failed", provider=getattr(provider, "name", "?"))
+
     # ---------------------------------------------------------------- jobs
 
     @staticmethod

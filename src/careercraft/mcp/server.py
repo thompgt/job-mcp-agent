@@ -110,7 +110,10 @@ def build_server(settings: Settings | None = None, *, service: CareerCraftServic
     async def lifespan(_: FastMCP) -> AsyncIterator[None]:
         await svc.startup()
         log.info("server.ready", version=__version__, transport=resolved.transport)
-        yield
+        try:
+            yield
+        finally:
+            await svc.shutdown()
 
     mcp: FastMCP = FastMCP(
         name="careercraft",
