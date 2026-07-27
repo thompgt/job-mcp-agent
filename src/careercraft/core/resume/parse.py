@@ -66,14 +66,18 @@ CANONICAL_SECTIONS: dict[str, list[str]] = {
     "contact": ["contact", "contacts", "contact details"],
     "skills": ["skills", "technical skills", "key skills", "core competencies"],
     "education": ["education", "academics", "academic background"],
-    "work experience": [
+    # Keys here are the canonical vocabulary that ends up in
+    # ``ParsedResume.sections_detected``, which is part of the MCP contract —
+    # so both header detectors must agree on them. Shortest natural form wins;
+    # the longer spellings are aliases.
+    "experience": [
+        "experience",
         "work experience",
         "professional experience",
-        "experience",
         "employment",
     ],
     "internship experience": ["internship experience", "internships", "internship"],
-    "academic projects": ["academic projects", "projects", "course projects"],
+    "projects": ["projects", "academic projects", "course projects", "additional projects"],
     "certifications": ["certifications", "certificates", "licenses"],
     "extra-curricular": [
         "extra-curricular activities",
@@ -104,18 +108,8 @@ NAME_BLACKLIST = {
 BULLET_HEAD = re.compile(r"^[•\-\*•]\s*")
 MONTH_WORD = re.compile(rf"^{_MONTH}$", re.I)
 
-EXPERIENCE_SECTIONS = (
-    "work experience",
-    "professional experience",
-    "experience",
-    "internship experience",
-)
-PROJECT_SECTIONS = (
-    "leadership & projects",
-    "projects",
-    "additional projects",
-    "academic projects",
-)
+EXPERIENCE_SECTIONS = ("experience", "internship experience")
+PROJECT_SECTIONS = ("projects",)
 
 
 # ------------------------------------------------------------ contact / name
@@ -213,14 +207,10 @@ def _normalize_header_name(name: str) -> str | None:
         ("education", "education"),
         ("certif", "certifications"),
     ]
-    if "work" in lowered and "experience" in lowered:
-        return "work experience"
     if "intern" in lowered and "experience" in lowered:
         return "internship experience"
-    if "experience" in lowered:
+    if "experience" in lowered or "employment" in lowered:
         return "experience"
-    if "academic" in lowered and "project" in lowered:
-        return "academic projects"
     if "project" in lowered:
         return "projects"
     if "extra" in lowered and "curricular" in lowered:
@@ -245,29 +235,51 @@ def _normalize_header_freeform(name: str) -> str | None:
 
 
 def split_sections(text: str) -> dict[str, str]:
-    """Split on explicit textual headers (``EDUCATION``, ``Experience:``)."""
+    """Split on explicit textual headers (``EDUCATION``, ``Experience:``).
+
+    Each mark records where the header *begins* as well as where its body
+    begins, because a section ends at the next header's first character, not
+    at its last: closing on the wrong end leaves the literal text
+    ``TECHNICAL SKILLS`` glued to the tail of the experience section, where it
+    goes on to be parsed as an employer.
+    """
     lines = text.splitlines(keepends=True)
     full = "".join(lines)
-    marks: list[tuple[str, int]] = [
-        (m.group(1).lower(), m.end()) for m in SECTION_RE.finditer(full)
-    ]
+
+    # (name, header_start, body_start)
+    marks: list[tuple[str, int, int]] = []
+    for m in SECTION_RE.finditer(full):
+        raw = m.group(1).lower()
+        marks.append((_normalize_header_name(raw) or raw, m.start(), m.end()))
 
     offset = 0
     for line in lines:
         if _looks_like_header(line.rstrip("\n")):
-            canonical = _normalize_header_name(line.strip())
+            stripped = line.strip()
+            canonical = _normalize_header_name(stripped) or _normalize_header_freeform(stripped)
             if canonical:
-                marks.append((canonical, offset + len(line)))
+                marks.append((canonical, offset, offset + len(line)))
         offset += len(line)
 
-    marks = sorted(set(marks), key=lambda m: m[1])
+    # The same header is often found twice — once by SECTION_RE and once by the
+    # all-caps scan — with slightly different spans. Keep one mark per starting
+    # position, preferring the one whose body starts latest so no part of the
+    # header line survives into the body.
+    by_start: dict[int, tuple[str, int, int]] = {}
+    for mark in marks:
+        existing = by_start.get(mark[1])
+        if existing is None or mark[2] > existing[2]:
+            by_start[mark[1]] = mark
+    marks = sorted(by_start.values(), key=lambda m: m[1])
     if not marks:
         return {"full": full}
 
     sections: dict[str, str] = {}
-    for i, (name, start) in enumerate(marks):
+    for i, (name, _header_start, body_start) in enumerate(marks):
         end = marks[i + 1][1] if i + 1 < len(marks) else len(full)
-        chunk = full[start:end].strip("\n").rstrip()
+        if end <= body_start:
+            continue
+        chunk = full[body_start:end].strip("\n").rstrip()
         if chunk:
             sections[name] = chunk
     return sections
@@ -690,8 +702,10 @@ def parse_resume_text(
     for key in EXPERIENCE_SECTIONS:
         if key in sections:
             experience.extend(_extract_experience(sections[key]))
-    if "leadership & projects" in sections:
-        experience.extend(_extract_leadership(sections["leadership & projects"]))
+    if "extra-curricular" in sections:
+        # Leadership and society roles are real experience; they just come
+        # formatted differently, so they get their own extractor.
+        experience.extend(_extract_leadership(sections["extra-curricular"]))
 
     projects: list[ProjectEntry] = []
     for key in PROJECT_SECTIONS:

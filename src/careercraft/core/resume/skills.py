@@ -118,14 +118,20 @@ SKILL_VOCABULARY: dict[str, tuple[str, ...]] = {
     "Risk Management": ("risk management", "var modeling"),
 }
 
-#: Terms so short they match inside ordinary prose ("go to", "r&d", "c of").
-#: These are only accepted when they stand alone in a delimited list, which is
-#: how skills sections are actually written.
-_AMBIGUOUS = frozenset({"c", "r", "go", "js", "ts", "ml", "rest", "node", "spring", "swift"})
+#: Terms that also occur as ordinary English ("go to", "the rest of", "in
+#: spring"). These are only accepted when they stand alone in a delimited list,
+#: which is how skills sections are actually written.
+#:
+#: "js" and "ts" are deliberately *not* here. They are not English words, and
+#: the only place they occur outside a skills list is a filename — where
+#: "app.js" implying JavaScript is the right answer anyway.
+_AMBIGUOUS = frozenset({"c", "r", "go", "ml", "rest", "node", "spring", "swift"})
 
 #: A single delimiter character. Kept one char wide so it can sit inside a
-#: look-behind, which Python requires to be fixed-width.
-_DELIM_CLASS = r"[,;|/•\t\n·]"
+#: look-behind, which Python requires to be fixed-width. The colon is included
+#: because skills sections routinely start "Languages: C, R, Go" and the first
+#: entry would otherwise have no delimiter to its left.
+_DELIM_CLASS = r"[,;:|/•\t\n·]"
 
 
 @lru_cache(maxsize=8)

@@ -1,0 +1,33 @@
+Jane Doe
+jane.doe@example.com | (555) 010-2345
+linkedin.com/in/janedoe | github.com/janedoe
+
+EDUCATION
+State University — B.S. in Data Science, 2021 - 2025
+Relevant coursework: machine learning, databases, statistics
+
+SKILLS
+Python, SQL, pandas, NumPy, scikit-learn, PyTorch, Docker, AWS, Git, Tableau,
+PostgreSQL, Airflow
+
+EXPERIENCE
+Acme Analytics
+Data Analyst Intern   Jun 2024 - Aug 2024
+- Built ETL pipelines in Python that moved 2M rows per day into PostgreSQL.
+- Automated the weekly Tableau reporting pack, cutting manual work by 6 hours.
+- Shipped a churn model in scikit-learn that lifted retention campaign
+  precision from 0.31 to 0.48.
+
+Northwind Labs
+Research Assistant   Sep 2023 - May 2024
+- Cleaned and labelled a 40k-image dataset for a PyTorch classifier.
+- Wrote the reproducibility harness the lab now uses for every experiment.
+
+PROJECTS
+Transit Delay Forecaster
+- Trained a gradient boosting model on three years of GTFS feeds; MAE 2.4 min.
+- Deployed as a Docker container on AWS with a small FastAPI front end.
+
+Grocery Price Tracker
+- Scraped and normalised prices from four retailers into a daily PostgreSQL
+  snapshot, with an Airflow DAG orchestrating the run.
