@@ -149,7 +149,9 @@ class JobicyProvider(JobProvider):
         salary_min = raw.get("annualSalaryMin")
         salary_max = raw.get("annualSalaryMax")
         currency = raw.get("salaryCurrency") or ""
-        salary = f"{salary_min}-{salary_max} {currency}".strip() if salary_min and salary_max else ""
+        salary = (
+            f"{salary_min}-{salary_max} {currency}".strip() if salary_min and salary_max else ""
+        )
 
         return Job(
             id=Job.make_id(title, company, url),

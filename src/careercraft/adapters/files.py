@@ -18,8 +18,8 @@ in bounded chunks so a large body cannot fill the disk before the size check.
 from __future__ import annotations
 
 import re
+from collections.abc import AsyncIterator, Iterable
 from pathlib import Path
-from typing import AsyncIterator, Iterable
 from uuid import uuid4
 
 import anyio
@@ -99,7 +99,7 @@ async def save_upload(
     exceeds it leaves nothing behind.
     """
     suffix = validate_suffix(filename)
-    upload_dir.mkdir(parents=True, exist_ok=True)
+    await anyio.Path(upload_dir).mkdir(parents=True, exist_ok=True)
     target = upload_dir / f"{uuid4().hex}{suffix}"
 
     written = 0

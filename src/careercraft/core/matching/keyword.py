@@ -27,16 +27,138 @@ _TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9+#.\-]*")
 #: Words that appear in nearly every posting and every resume, so they add
 #: length without adding signal.
 _STOPWORDS = frozenset(
-    """
-    a an the and or but if then than that this these those of in on at to for with by from as is
-    are was were be been being have has had do does did will would shall should can could may
-    might must not no we you your our their his her its it they them he she i me my us who whom
-    which what when where why how all any both each few more most other some such only own same
-    so too very just also about into over under again further once here there
-    job role position company team work working experience years year candidate candidates
-    opportunity opportunities apply applying application requirements responsibilities you'll
-    we're strong excellent ability skills required preferred plus benefits including etc
-    """.split()
+    [
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "if",
+        "then",
+        "than",
+        "that",
+        "this",
+        "these",
+        "those",
+        "of",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "with",
+        "by",
+        "from",
+        "as",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "shall",
+        "should",
+        "can",
+        "could",
+        "may",
+        "might",
+        "must",
+        "not",
+        "no",
+        "we",
+        "you",
+        "your",
+        "our",
+        "their",
+        "his",
+        "her",
+        "its",
+        "it",
+        "they",
+        "them",
+        "he",
+        "she",
+        "i",
+        "me",
+        "my",
+        "us",
+        "who",
+        "whom",
+        "which",
+        "what",
+        "when",
+        "where",
+        "why",
+        "how",
+        "all",
+        "any",
+        "both",
+        "each",
+        "few",
+        "more",
+        "most",
+        "other",
+        "some",
+        "such",
+        "only",
+        "own",
+        "same",
+        "so",
+        "too",
+        "very",
+        "just",
+        "also",
+        "about",
+        "into",
+        "over",
+        "under",
+        "again",
+        "further",
+        "once",
+        "here",
+        "there",
+        "job",
+        "role",
+        "position",
+        "company",
+        "team",
+        "work",
+        "working",
+        "experience",
+        "years",
+        "year",
+        "candidate",
+        "candidates",
+        "opportunity",
+        "opportunities",
+        "apply",
+        "applying",
+        "application",
+        "requirements",
+        "responsibilities",
+        "you'll",
+        "we're",
+        "strong",
+        "excellent",
+        "ability",
+        "skills",
+        "required",
+        "preferred",
+        "plus",
+        "benefits",
+        "including",
+        "etc",
+    ]
 )
 
 
@@ -93,16 +215,14 @@ class KeywordScorer:
         self._job_vectors = [self._vector(tokens) for tokens in self._job_tokens]
 
     def _vector(self, tokens: list[str]) -> dict[str, float]:
-        return {
-            term: tf * self._idf.get(term, 1.0) for term, tf in _tf_weights(tokens).items()
-        }
+        return {term: tf * self._idf.get(term, 1.0) for term, tf in _tf_weights(tokens).items()}
 
     def score_all(self, resume: ParsedResume) -> list[tuple[float, list[str], list[str]]]:
         """Score every job. Returns ``(score, matched_skills, missing_skills)``."""
         resume_vector = self._vector(tokenize(resume.to_search_text()))
         results: list[tuple[float, list[str], list[str]]] = []
 
-        for index, job in enumerate(self._jobs):
+        for index in range(len(self._jobs)):
             text_score = _cosine(resume_vector, self._job_vectors[index])
             matched, missing = skill_overlap(resume.skills, self._job_texts[index])
 

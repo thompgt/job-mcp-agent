@@ -7,7 +7,7 @@ than an import error or a None check scattered through the callers.
 
 from __future__ import annotations
 
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from careercraft.errors import ProviderError
 from careercraft.llm import ChatMessage
@@ -40,8 +40,12 @@ class NullProvider:
         temperature: float = 0.7,
         max_tokens: int | None = None,
     ) -> AsyncIterator[str]:
+        # The unreachable yield is what makes this an async generator rather
+        # than a coroutine, so it satisfies the LLMProvider protocol. Without
+        # it, calling stream() would raise before returning an iterator, and
+        # `async for` over the result would fail with a different error.
         raise ProviderError(
             "No language model is configured.",
             remedy="Install Ollama from https://ollama.com and run `ollama serve`.",
         )
-        yield ""  # pragma: no cover - unreachable, keeps this an async generator
+        yield ""  # type: ignore[unreachable]

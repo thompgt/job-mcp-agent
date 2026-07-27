@@ -10,12 +10,15 @@ working.
 from __future__ import annotations
 
 import functools
+import json
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from platformdirs import user_data_path
 from pydantic import AliasChoices, Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+from careercraft.errors import ValidationFailed
 
 
 def _default_data_dir() -> Path:
@@ -38,7 +41,11 @@ class Settings(BaseSettings):
 
     max_upload_bytes: int = 10 * 1024 * 1024
 
-    allowed_paths: list[Path] = Field(default_factory=lambda: [Path.home()])
+    # NoDecode keeps pydantic-settings from JSON-decoding the raw env value
+    # before the validators run. Without it a plain "C:\a,C:\b" raises a
+    # SettingsError deep inside the source layer, and the CSV validator below
+    # never gets a chance.
+    allowed_paths: Annotated[list[Path], NoDecode] = Field(default_factory=lambda: [Path.home()])
     """Roots under which ``parse_resume(path=...)`` may read. Paths outside
     these roots are refused even in stdio mode."""
 
@@ -79,7 +86,9 @@ class Settings(BaseSettings):
     port: int = 8000
     http_path: str = "/mcp"
     auth_token: str | None = None
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    cors_origins: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["http://localhost:3000"]
+    )
 
     log_level: str = "INFO"
 
@@ -88,9 +97,15 @@ class Settings(BaseSettings):
     def _split_csv(cls, value: object) -> object:
         """Accept ``A,B,C`` as well as JSON lists — env vars are flat strings
         and requiring JSON here is a paper cut nobody needs."""
-        if isinstance(value, str) and not value.strip().startswith("["):
-            return [part.strip() for part in value.split(",") if part.strip()]
-        return value
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if text.startswith("["):
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                pass  # fall through and treat it as a plain CSV string
+        return [part.strip() for part in text.split(",") if part.strip()]
 
     @field_validator("allowed_paths")
     @classmethod
@@ -119,14 +134,14 @@ class Settings(BaseSettings):
         """
         loopback = {"127.0.0.1", "::1", "localhost"}
         if self.transport == "http" and self.host not in loopback and not self.auth_token:
-            raise ValueError(
-                f"Refusing to bind {self.host}:{self.port} without an auth token. "
-                "Set CAREERCRAFT_AUTH_TOKEN, or bind 127.0.0.1 instead."
+            raise ValidationFailed(
+                f"Refusing to bind {self.host}:{self.port} without an auth token.",
+                remedy="Set CAREERCRAFT_AUTH_TOKEN, or bind 127.0.0.1 instead.",
             )
         if "*" in self.cors_origins and self.auth_token:
-            raise ValueError(
-                "CAREERCRAFT_CORS_ORIGINS='*' cannot be combined with an auth token. "
-                "List the exact origins that may call this server."
+            raise ValidationFailed(
+                "CAREERCRAFT_CORS_ORIGINS='*' cannot be combined with an auth token.",
+                remedy="List the exact origins that may call this server.",
             )
 
 

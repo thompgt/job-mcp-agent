@@ -11,8 +11,8 @@ copies had already drifted.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Awaitable, Callable
 from uuid import uuid4
 
 import anyio
@@ -24,6 +24,7 @@ from careercraft.core.jobs import JobicyProvider, JobProvider, JobQuery, MockPro
 from careercraft.core.letters import generate_letter
 from careercraft.core.matching import rank_jobs
 from careercraft.core.resume import extract_text, parse_resume_text
+from careercraft.core.resume.extract import LayoutLine
 from careercraft.core.resume.skills import load_extra_terms
 from careercraft.errors import NotFound, ValidationFailed
 from careercraft.llm import LLMProvider
@@ -97,7 +98,7 @@ class CareerCraftService:
             if closer is not None:
                 try:
                     await closer()
-                except Exception:  # noqa: BLE001 - shutdown must not raise
+                except Exception:
                     log.debug("shutdown.close_failed", provider=getattr(provider, "name", "?"))
 
     # ---------------------------------------------------------------- jobs
@@ -188,7 +189,7 @@ class CareerCraftService:
         self,
         text: str,
         *,
-        layout_lines: list | None,
+        layout_lines: list[LayoutLine] | None,
         source_name: str | None,
         used_ocr: bool,
     ) -> ParsedResume:

@@ -12,7 +12,8 @@ provider is a new file rather than a refactor.
 
 from __future__ import annotations
 
-from typing import AsyncIterator, Literal, Protocol, TypedDict, runtime_checkable
+from collections.abc import AsyncIterator
+from typing import Literal, Protocol, TypedDict, runtime_checkable
 
 
 class ChatMessage(TypedDict):

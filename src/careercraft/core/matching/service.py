@@ -86,7 +86,7 @@ def rank_jobs(
             missing_skills=missing,
             rationale=explain(score, matched, missing),
         )
-        for job, (score, matched, missing) in zip(kept, scored)
+        for job, (score, matched, missing) in zip(kept, scored, strict=True)
         if score >= min_score
     ]
     matches.sort(key=lambda m: m.score, reverse=True)

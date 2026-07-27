@@ -21,16 +21,38 @@ import structlog
 _configured = False
 
 
+class _StderrProxy:
+    """A file object that resolves ``sys.stderr`` on every write.
+
+    Binding the logger to the ``sys.stderr`` object that happened to exist at
+    configuration time is a subtle trap: anything that later replaces the
+    stream — a test harness capturing output, a supervisor reopening the log,
+    ``contextlib.redirect_stderr`` — leaves the logger holding a closed file,
+    and the next log call raises ``ValueError: I/O operation on closed file``
+    from inside unrelated code. Resolving late costs one attribute lookup.
+    """
+
+    def write(self, data: str) -> int:
+        return sys.stderr.write(data)
+
+    def flush(self) -> None:
+        sys.stderr.flush()
+
+    def isatty(self) -> bool:
+        return bool(getattr(sys.stderr, "isatty", lambda: False)())
+
+
 def configure_logging(level: str = "INFO", *, force_json: bool | None = None) -> None:
     """Install the structlog + stdlib logging pipeline. Idempotent."""
     global _configured
     if _configured:
         return
 
+    stderr = _StderrProxy()
     numeric = getattr(logging, level.upper(), logging.INFO)
-    as_json = (not sys.stderr.isatty()) if force_json is None else force_json
+    as_json = (not stderr.isatty()) if force_json is None else force_json
 
-    handler = logging.StreamHandler(sys.stderr)
+    handler = logging.StreamHandler(stderr)
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(numeric)
@@ -48,12 +70,12 @@ def configure_logging(level: str = "INFO", *, force_json: bool | None = None) ->
     if as_json:
         processors += [structlog.processors.format_exc_info, structlog.processors.JSONRenderer()]
     else:
-        processors += [structlog.dev.ConsoleRenderer(colors=sys.stderr.isatty())]
+        processors += [structlog.dev.ConsoleRenderer(colors=stderr.isatty())]
 
     structlog.configure(
         processors=processors,
         wrapper_class=structlog.make_filtering_bound_logger(numeric),
-        logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
+        logger_factory=structlog.WriteLoggerFactory(file=stderr),  # type: ignore[arg-type]
         cache_logger_on_first_use=True,
     )
     _configured = True

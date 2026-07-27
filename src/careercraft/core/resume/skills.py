@@ -144,17 +144,16 @@ def _compiled(extra_terms: tuple[str, ...] = ()) -> list[tuple[str, re.Pattern[s
     compiled: list[tuple[str, re.Pattern[str]]] = []
     for canonical, aliases in vocab.items():
         alts = sorted({a.lower() for a in aliases}, key=len, reverse=True)
-        safe, risky = [], []
+        safe: list[str] = []
+        risky: list[str] = []
         for alias in alts:
             (risky if alias in _AMBIGUOUS else safe).append(re.escape(alias))
-        parts = []
+        parts: list[str] = []
         if safe:
             parts.append(rf"(?<![A-Za-z0-9+#_-])(?:{'|'.join(safe)})(?![A-Za-z0-9+#_-])")
         if risky:
             group = "|".join(risky)
-            parts.append(
-                rf"(?:^|(?<={_DELIM_CLASS}))[ ]*(?:{group})[ ]*(?={_DELIM_CLASS}|$)"
-            )
+            parts.append(rf"(?:^|(?<={_DELIM_CLASS}))[ ]*(?:{group})[ ]*(?={_DELIM_CLASS}|$)")
         compiled.append((canonical, re.compile("|".join(parts), re.IGNORECASE | re.MULTILINE)))
     return compiled
 

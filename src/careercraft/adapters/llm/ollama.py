@@ -9,7 +9,8 @@ that endpoint.
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -70,14 +71,14 @@ class OllamaProvider:
         """True when the daemon answers. Never raises."""
         try:
             await self._request("GET", "/api/tags", _PROBE_TIMEOUT)
-        except Exception:  # noqa: BLE001 - a probe that raises is a probe that lies
+        except Exception:
             return False
         return True
 
     async def list_models(self) -> list[str]:
         try:
             response = await self._request("GET", "/api/tags", _PROBE_TIMEOUT)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return []
         payload = response.json()
         return [m.get("name", "") for m in payload.get("models", []) if m.get("name")]

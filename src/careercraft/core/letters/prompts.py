@@ -20,8 +20,7 @@ TONE_GUIDANCE: dict[str, str] = {
     ),
     "concise": "Be direct. Cut every sentence that does not carry information.",
     "academic": (
-        "Use a formal register, foregrounding research, methodology and theoretical "
-        "grounding."
+        "Use a formal register, foregrounding research, methodology and theoretical grounding."
     ),
 }
 

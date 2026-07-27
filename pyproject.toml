@@ -115,12 +115,24 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S", "ASYNC"]
+"tests/**" = ["S", "ASYNC", "TID251"]
 "scripts/**" = ["S"]
+# The layering rule below is a rule about the *core*. These are the layers
+# whose entire job is to own one of the banned imports.
+"src/careercraft/mcp/**" = ["TID251"]
+"src/careercraft/api/**" = ["TID251"]
+"src/careercraft/adapters/storage/**" = ["TID251"]
+"src/careercraft/cli.py" = ["TID251"]
+# Resume text is full of en dashes, hyphen bullets and multiplication signs,
+# and the parser has to match the characters that are actually there.
+"src/careercraft/core/resume/parse.py" = ["RUF001"]
+"src/careercraft/core/resume/extract.py" = ["RUF001"]
 
 # The layering rule from docs/MIGRATION-PLAN.md section 3: the domain core
 # must stay free of transport, storage and framework imports so it can be
-# unit-tested and reused without any of them installed.
+# unit-tested and reused without any of them installed. Enforced everywhere
+# except the adapter layers exempted above, so a stray `import fastmcp` in
+# core/ is a lint failure rather than a design decision nobody noticed.
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "fastmcp".msg = "core/** must not import transport libraries; keep this in careercraft.mcp"
 "fastapi".msg = "core/** must not import web frameworks; keep this in careercraft.api"

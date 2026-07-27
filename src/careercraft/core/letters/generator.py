@@ -41,7 +41,10 @@ _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
 
 _THEME_HINTS: list[tuple[str, tuple[str, ...]]] = [
     ("hands-on engineering delivery", ("engineer", "developer", "software", "backend", "platform")),
-    ("data and quantitative analysis", ("data", "analyst", "quantitative", "research", "scientist")),
+    (
+        "data and quantitative analysis",
+        ("data", "analyst", "quantitative", "research", "scientist"),
+    ),
     ("machine learning practice", ("machine learning", "ml", "ai", "model", "nlp")),
     ("infrastructure and operations", ("devops", "cloud", "infrastructure", "sre", "platform")),
     ("leadership and ownership", ("lead", "president", "board", "founder", "captain", "manager")),
@@ -121,9 +124,12 @@ def _company_hooks(job: Job, limit: int = 3) -> list[str]:
     for sentence in _SENTENCE_RE.split(job.description):
         clean = sentence.strip()
         lowered = clean.lower()
-        if 40 <= len(clean) <= 240 and any(s in lowered for s in signals):
-            if not any(n in lowered for n in noise):
-                hooks.append(clean)
+        if (
+            40 <= len(clean) <= 240
+            and any(s in lowered for s in signals)
+            and not any(n in lowered for n in noise)
+        ):
+            hooks.append(clean)
     return hooks[:limit]
 
 
@@ -135,7 +141,6 @@ def build_brief(
     length: Length = "medium",
 ) -> LetterBrief:
     """Assemble everything a writer needs, without writing anything."""
-    matched, missing = skill_overlap(resume.skills, job.to_search_text())
     themes = _themes(resume, job)
     company = job.company or "the company"
 
@@ -154,16 +159,12 @@ def build_brief(
         company=company,
         role=job.title,
         opening_hook=(
-            f"Connect the candidate's {themes[0]} to {company}'s "
-            f"{job.title.lower()} role."
+            f"Connect the candidate's {themes[0]} to {company}'s {job.title.lower()} role."
         ),
         themes=themes,
         evidence=_evidence(resume),
         company_hooks=_company_hooks(job),
-        closing=(
-            "Reiterate fit in one sentence and ask for a conversation. "
-            f"Tone: {tone}."
-        ),
+        closing=(f"Reiterate fit in one sentence and ask for a conversation. Tone: {tone}."),
         paragraph_plan=plan,
     )
 
@@ -242,12 +243,7 @@ async def generate_letter(
     there is no downstream model to hand the brief to.
     """
     matched, missing = skill_overlap(resume.skills, job.to_search_text())
-    base = {
-        "job_id": job.id,
-        "resume_id": resume.id or None,
-        "tone": tone,
-        "length": length,
-    }
+    resume_id = resume.id or None
 
     if await provider.is_available():
         messages = build_messages(
@@ -270,7 +266,10 @@ async def generate_letter(
             text = ""
         if text.strip():
             return CoverLetter(
-                **base,
+                job_id=job.id,
+                resume_id=resume_id,
+                tone=tone,
+                length=length,
                 text=text,
                 generated_by="ollama",
                 model=model,
@@ -280,10 +279,21 @@ async def generate_letter(
 
     if allow_brief:
         return CoverLetter(
-            **base,
+            job_id=job.id,
+            resume_id=resume_id,
+            tone=tone,
+            length=length,
             brief=build_brief(resume, job, tone=tone, length=length),
             generated_by="brief",
         )
 
     text = render_template(resume, job, tone=tone, length=length)
-    return CoverLetter(**base, text=text, generated_by="template", word_count=len(text.split()))
+    return CoverLetter(
+        job_id=job.id,
+        resume_id=resume_id,
+        tone=tone,
+        length=length,
+        text=text,
+        generated_by="template",
+        word_count=len(text.split()),
+    )

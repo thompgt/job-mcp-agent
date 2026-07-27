@@ -13,7 +13,6 @@ import pytest
 from careercraft.adapters.files import chunked, resolve_allowed, save_upload, validate_suffix
 from careercraft.errors import AccessDenied, ValidationFailed
 
-
 # ------------------------------------------------------------ suffixes
 
 

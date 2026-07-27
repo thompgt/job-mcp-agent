@@ -81,9 +81,7 @@ def test_empty_input_does_not_explode():
 
 
 def test_split_sections_recognises_variant_headers():
-    sections = split_sections(
-        "WORK EXPERIENCE\nAcme\n\nTECHNICAL SKILLS\nPython\n\nEDUCATION\nBSc"
-    )
+    sections = split_sections("WORK EXPERIENCE\nAcme\n\nTECHNICAL SKILLS\nPython\n\nEDUCATION\nBSc")
     assert "experience" in sections
     assert "skills" in sections
     assert "education" in sections

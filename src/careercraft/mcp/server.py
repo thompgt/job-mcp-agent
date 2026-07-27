@@ -27,8 +27,9 @@ outright when the server is reachable over HTTP.
 # works at runtime on every Python this package supports (3.10+).
 
 import json
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Annotated, AsyncIterator
+from typing import Annotated
 
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
@@ -96,7 +97,9 @@ def _fail(exc: CareerCraftError) -> ToolError:
     return ToolError(f"[{exc.code}] {detail}")
 
 
-def build_server(settings: Settings | None = None, *, service: CareerCraftService | None = None) -> FastMCP:
+def build_server(
+    settings: Settings | None = None, *, service: CareerCraftService | None = None
+) -> FastMCP:
     """Construct the server.
 
     ``service`` is injectable so tests can drive the whole tool surface against
@@ -448,4 +451,4 @@ def build_default_server() -> FastMCP:
     return build_server()
 
 
-__all__ = ["build_server", "build_default_server", "INSTRUCTIONS"]
+__all__ = ["INSTRUCTIONS", "build_default_server", "build_server"]

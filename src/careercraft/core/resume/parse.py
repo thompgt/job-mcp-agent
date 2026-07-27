@@ -1,4 +1,4 @@
-"""Structured parsing of resume text.
+﻿"""Structured parsing of resume text.
 
 The heuristics here are ported from v1's ``resume_parser.py`` with their
 behaviour intact — they were tuned against real documents and rewriting them
@@ -13,6 +13,7 @@ from __future__ import annotations
 import difflib
 import re
 from importlib.util import find_spec
+from typing import Any
 
 from careercraft.core.resume.extract import LayoutLine, normalize_text
 from careercraft.core.resume.skills import extract_skills
@@ -88,7 +89,7 @@ CANONICAL_SECTIONS: dict[str, list[str]] = {
     "awards": ["awards", "honors", "achievements"],
 }
 ALL_HEADER_VARIANTS = {
-    alias: key for key, aliases in CANONICAL_SECTIONS.items() for alias in ([key] + aliases)
+    alias: key for key, aliases in CANONICAL_SECTIONS.items() for alias in [key, *aliases]
 }
 
 NAME_BLACKLIST = {
@@ -156,12 +157,11 @@ def _spacy_person(text: str, model: str) -> str | None:
     try:
         if find_spec("spacy") is None:
             return None
-        import spacy
     except (ImportError, ValueError):
         return None
     try:
         nlp = _load_spacy(model)
-    except Exception:  # noqa: BLE001 - a missing model must not break parsing
+    except Exception:
         return None
     doc = nlp(text[:5000])
     for ent in doc.ents:
@@ -173,7 +173,7 @@ def _spacy_person(text: str, model: str) -> str | None:
 _SPACY_CACHE: dict[str, object] = {}
 
 
-def _load_spacy(model: str) -> object:
+def _load_spacy(model: str) -> Any:
     if model not in _SPACY_CACHE:
         import spacy
 
@@ -215,7 +215,12 @@ def _normalize_header_name(name: str) -> str | None:
         return "projects"
     if "extra" in lowered and "curricular" in lowered:
         return "extra-curricular"
-    for needle, canonical in [*rules, ("profile", "profile"), ("contact", "contact"), ("skill", "skills")]:
+    for needle, canonical in [
+        *rules,
+        ("profile", "profile"),
+        ("contact", "contact"),
+        ("skill", "skills"),
+    ]:
         if needle in lowered:
             return canonical
     return None
@@ -404,7 +409,7 @@ def _extract_experience(section: str) -> list[ExperienceEntry]:
     """
     lines = [BULLET_HEAD.sub("", ln).strip() for ln in section.splitlines() if ln.strip()]
     entries: list[ExperienceEntry] = []
-    current: dict[str, object] | None = None
+    current: dict[str, Any] | None = None
 
     company_like = re.compile(r"^[A-Z][A-Za-z0-9@&×/.,\-–— ]{1,80}$")
     role_plus_date = re.compile(rf"^(.+?)\s+({DATE_RANGE_RE.pattern})$", re.I)
@@ -415,13 +420,13 @@ def _extract_experience(section: str) -> list[ExperienceEntry]:
             _looks_like_header(text) and _normalize_header_name(text) is not None
         )
 
-    def blank() -> dict[str, object]:
+    def blank() -> dict[str, Any]:
         return {"organization": "", "title": "", "period": None, "buf": []}
 
     def flush() -> None:
         nonlocal current
         if current:
-            highlights = _reflow([s for s in current["buf"] if s])  # type: ignore[arg-type]
+            highlights = _reflow([s for s in current["buf"] if s])
             org = str(current["organization"]).strip()
             title = str(current["title"]).strip()
             if org or title or highlights:
@@ -429,7 +434,9 @@ def _extract_experience(section: str) -> list[ExperienceEntry]:
                     ExperienceEntry(
                         organization=org,
                         title=title,
-                        period=(str(current["period"]).strip() or None) if current["period"] else None,
+                        period=(str(current["period"]).strip() or None)
+                        if current["period"]
+                        else None,
                         highlights=highlights,
                     )
                 )
@@ -524,7 +531,7 @@ def _extract_experience(section: str) -> list[ExperienceEntry]:
             if not current["title"]:
                 current["title"] = _clean_title(line)
             else:
-                current["buf"].append(line)  # type: ignore[union-attr]
+                current["buf"].append(line)
             i += 1
             continue
 
@@ -535,7 +542,7 @@ def _extract_experience(section: str) -> list[ExperienceEntry]:
             continue
 
         current = current or blank()
-        current["buf"].append(line)  # type: ignore[union-attr]
+        current["buf"].append(line)
         i += 1
 
     flush()
@@ -613,12 +620,12 @@ def _extract_leadership(section: str) -> list[ExperienceEntry]:
     role_words = re.compile(r"(executive|president|board|chair|lead|leader|captain|founder)", re.I)
 
     entries: list[ExperienceEntry] = []
-    current: dict[str, object] | None = None
+    current: dict[str, Any] | None = None
 
     def flush() -> None:
         nonlocal current
         if current:
-            highlights = _reflow([s for s in current["buf"] if s])  # type: ignore[arg-type]
+            highlights = _reflow([s for s in current["buf"] if s])
             org, title = str(current["organization"]).strip(), str(current["title"]).strip()
             if org or title or highlights:
                 entries.append(
@@ -653,7 +660,7 @@ def _extract_leadership(section: str) -> list[ExperienceEntry]:
                 current["organization"] = line
             continue
         current = current or {"organization": "", "title": "", "period": None, "buf": []}
-        current["buf"].append(line)  # type: ignore[union-attr]
+        current["buf"].append(line)
         _ = i
     flush()
     return entries

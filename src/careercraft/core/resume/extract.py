@@ -152,7 +152,7 @@ def extract_text(path: Path, *, enable_ocr: bool = True, fast: bool = False) -> 
             if extraction_backends()["ocr"]:
                 try:
                     ocr_text = _ocr_pdf(path)
-                except Exception:  # noqa: BLE001 - OCR is best-effort by design
+                except Exception:
                     ocr_text = ""
                 if ocr_text.strip():
                     text, used_ocr = ocr_text, True

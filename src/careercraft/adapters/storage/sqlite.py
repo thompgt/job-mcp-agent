@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import anyio.to_thread
 
@@ -118,8 +119,7 @@ class SqliteStore:
     def _upsert_jobs_sync(self, jobs: list[Job]) -> int:
         now = _utcnow_iso()
         rows = [
-            (job.id, job.title, job.company, job.source, job.model_dump_json(), now)
-            for job in jobs
+            (job.id, job.title, job.company, job.source, job.model_dump_json(), now) for job in jobs
         ]
         with self._connect() as conn:
             # Postings are content-addressed, so a re-fetch of the same role is
@@ -195,9 +195,7 @@ class SqliteStore:
 
     def _get_resume_sync(self, resume_id: str) -> ParsedResume | None:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT payload FROM resumes WHERE id = ?", (resume_id,)
-            ).fetchone()
+            row = conn.execute("SELECT payload FROM resumes WHERE id = ?", (resume_id,)).fetchone()
         return ParsedResume.model_validate_json(row["payload"]) if row else None
 
     async def get_resume(self, resume_id: str) -> ParsedResume | None:
@@ -274,9 +272,7 @@ class SqliteStore:
 
     def _get_letter_sync(self, letter_id: str) -> CoverLetter | None:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT payload FROM letters WHERE id = ?", (letter_id,)
-            ).fetchone()
+            row = conn.execute("SELECT payload FROM letters WHERE id = ?", (letter_id,)).fetchone()
         return CoverLetter.model_validate_json(row["payload"]) if row else None
 
     async def get_letter(self, letter_id: str) -> CoverLetter | None:
