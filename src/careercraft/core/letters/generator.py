@@ -23,7 +23,9 @@ import re
 
 from careercraft.core.letters.prompts import build_messages
 from careercraft.core.resume.skills import skill_overlap
+from careercraft.errors import CareerCraftError
 from careercraft.llm import LLMProvider
+from careercraft.logging import get_logger
 from careercraft.models import (
     CoverLetter,
     Job,
@@ -32,6 +34,8 @@ from careercraft.models import (
     ParsedResume,
     Tone,
 )
+
+log = get_logger(__name__)
 
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
 
@@ -254,14 +258,25 @@ async def generate_letter(
             matched_skills=matched,
             missing_skills=missing,
         )
-        text = await provider.complete(messages, model=model, temperature=temperature)
-        return CoverLetter(
-            **base,
-            text=text,
-            generated_by="ollama",
-            model=model,
-            word_count=len(text.split()),
-        )
+        # is_available() is a cheap probe, not a promise. A daemon can be up
+        # and still fail the request — the model was evicted, the context
+        # overflowed, generation timed out. Falling through to the brief is
+        # strictly better than handing the caller an exception, and the caller
+        # can see which path ran from ``generated_by``.
+        try:
+            text = await provider.complete(messages, model=model, temperature=temperature)
+        except (CareerCraftError, OSError) as exc:
+            log.warning("letter.provider_failed", provider=provider.name, error=str(exc))
+            text = ""
+        if text.strip():
+            return CoverLetter(
+                **base,
+                text=text,
+                generated_by="ollama",
+                model=model,
+                word_count=len(text.split()),
+            )
+        log.warning("letter.empty_response", provider=provider.name)
 
     if allow_brief:
         return CoverLetter(
