@@ -1,4 +1,4 @@
-"""Request bodies for the HTTP API.
+﻿"""Request bodies for the HTTP API.
 
 Responses reuse the domain models from :mod:`careercraft.models` verbatim, so
 the OpenAPI schema the frontend generates its client from and the MCP tool
@@ -36,7 +36,7 @@ class MatchRequest(Body):
     query: str = ""
     location: str = ""
     top_k: int = Field(default=10, ge=1, le=50)
-    min_score: float = Field(default=0.25, ge=0.0, le=1.0)
+    min_score: float = Field(default=0.15, ge=0.0, le=1.0)
     strategy: Strategy = "auto"
     filter_seniority: bool = True
 
