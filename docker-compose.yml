@@ -1,0 +1,48 @@
+# Two services, both published on loopback only.
+#
+# Ollama is deliberately not a service here. Most people who want it already
+# have it installed with their models pulled, and shipping a third container
+# that re-downloads several gigabytes would be worse than pointing at theirs.
+# Everything except letter *prose* works without it.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # 127.0.0.1: prefix, not just "8000:8000" — the short form publishes on
+    # every interface, which on a laptop on a café network means the whole
+    # café can read your resumes.
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      CAREERCRAFT_OLLAMA_MODEL: ${CAREERCRAFT_OLLAMA_MODEL:-llama3.2:1b}
+      CAREERCRAFT_CORS_ORIGINS: http://localhost:3000
+      CAREERCRAFT_LOG_LEVEL: ${CAREERCRAFT_LOG_LEVEL:-INFO}
+    volumes:
+      - careercraft-data:/data
+    extra_hosts:
+      # Linux does not resolve host.docker.internal by default.
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        # Next.js inlines NEXT_PUBLIC_* at build time, so this is a build arg
+        # as well as an environment variable.
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  careercraft-data:

@@ -19,6 +19,9 @@ from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from careercraft.errors import ValidationFailed
+from careercraft.logging import get_logger
+
+log = get_logger(__name__)
 
 
 def _default_data_dir() -> Path:
@@ -90,6 +93,16 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:3000"]
     )
 
+    allow_unauthenticated_bind: bool = False
+    """Permit a non-loopback bind with no auth token.
+
+    A container has to bind ``0.0.0.0`` to receive forwarded traffic at all,
+    and inside one that is not the same risk as doing it on a laptop: the
+    exposure is whatever the operator published. So the guard stays on by
+    default and this is the deliberate, named way past it — rather than
+    softening the check itself, which would remove the protection everywhere
+    to solve it in one place."""
+
     log_level: str = "INFO"
 
     @field_validator("allowed_paths", "cors_origins", mode="before")
@@ -133,10 +146,22 @@ class Settings(BaseSettings):
         convenience.
         """
         loopback = {"127.0.0.1", "::1", "localhost"}
-        if self.transport == "http" and self.host not in loopback and not self.auth_token:
+        exposed = self.transport == "http" and self.host not in loopback
+        if exposed and not self.auth_token and not self.allow_unauthenticated_bind:
             raise ValidationFailed(
                 f"Refusing to bind {self.host}:{self.port} without an auth token.",
-                remedy="Set CAREERCRAFT_AUTH_TOKEN, or bind 127.0.0.1 instead.",
+                remedy=(
+                    "Set CAREERCRAFT_AUTH_TOKEN, bind 127.0.0.1 instead, or set "
+                    "CAREERCRAFT_ALLOW_UNAUTHENTICATED_BIND=1 if the port is only "
+                    "reachable from inside a container network."
+                ),
+            )
+        if exposed and self.allow_unauthenticated_bind and not self.auth_token:
+            log.warning(
+                "bind.unauthenticated",
+                host=self.host,
+                port=self.port,
+                detail="Anyone who can reach this port can read every stored resume.",
             )
         if "*" in self.cors_origins and self.auth_token:
             raise ValidationFailed(

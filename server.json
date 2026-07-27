@@ -1,0 +1,37 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.tpequegnot/careercraft",
+  "description": "Parse a resume, rank job postings against it with explained scores, and draft grounded cover letters — entirely on your machine.",
+  "repository": {
+    "url": "https://github.com/tpequegnot/careercraft-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "careercraft-mcp",
+      "version": "0.1.0",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        {
+          "name": "CAREERCRAFT_ALLOWED_PATHS",
+          "description": "Directories the server may read resumes from. Defaults to the user's home directory.",
+          "isRequired": false
+        },
+        {
+          "name": "OLLAMA_BASE_URL",
+          "description": "Ollama daemon URL for writing cover letter prose. Without it the server returns a grounded brief for the host model to write from instead.",
+          "isRequired": false,
+          "default": "http://127.0.0.1:11434"
+        },
+        {
+          "name": "CAREERCRAFT_OLLAMA_MODEL",
+          "description": "Which pulled Ollama model to use.",
+          "isRequired": false,
+          "default": "llama3.2:1b"
+        }
+      ]
+    }
+  ]
+}

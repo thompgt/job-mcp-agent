@@ -77,6 +77,23 @@ def test_a_public_bind_with_a_token_is_allowed():
     Settings(transport="http", host="0.0.0.0", auth_token="s3cret").check_bind_safety()
 
 
+def test_the_container_opt_out_permits_an_unauthenticated_bind():
+    """A container must bind 0.0.0.0 to receive published traffic at all."""
+    Settings(
+        transport="http", host="0.0.0.0", allow_unauthenticated_bind=True
+    ).check_bind_safety()
+
+
+def test_the_opt_out_is_off_by_default():
+    assert Settings().allow_unauthenticated_bind is False
+
+
+def test_the_refusal_names_the_opt_out():
+    with pytest.raises(ValidationFailed) as excinfo:
+        Settings(transport="http", host="0.0.0.0").check_bind_safety()
+    assert "CAREERCRAFT_ALLOW_UNAUTHENTICATED_BIND" in str(excinfo.value)
+
+
 def test_wildcard_cors_alongside_a_token_is_refused():
     """A wildcard origin hands the token to any page the browser visits."""
     with pytest.raises(ValidationFailed):

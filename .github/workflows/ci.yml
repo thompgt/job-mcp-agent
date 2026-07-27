@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "rewrite/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep test runs off the user data directory and away from any local daemon.
+  CAREERCRAFT_OLLAMA_BASE_URL: disabled
+  FORCE_COLOR: "1"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv pip install --system -e '.[api,dev]'
+      - name: ruff check
+        run: ruff check src tests
+      - name: ruff format
+        run: ruff format --check src tests
+      - name: mypy
+        run: mypy
+
+  test:
+    # The base install has to work on its own — that is the whole premise of
+    # the extras — so the matrix covers it as well as the full install.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.13"]
+        extras: ["api,dev"]
+        include:
+          - os: ubuntu-latest
+            python: "3.12"
+            extras: "dev"
+            name-suffix: " (base install only)"
+    runs-on: ${{ matrix.os }}
+    name: test ${{ matrix.os }} py${{ matrix.python }}${{ matrix.name-suffix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install ${{ matrix.python }}
+      - run: uv pip install --system -e '.[${{ matrix.extras }}]'
+      - run: pytest --cov --cov-report=term-missing --cov-report=xml
+      - name: Verify the console script starts
+        run: careercraft doctor
+      - uses: codecov/codecov-action@v5
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.13'
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+        continue-on-error: true
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      - name: Install the built wheel into a clean environment
+        run: |
+          uv venv /tmp/check
+          uv pip install --python /tmp/check/bin/python dist/*.whl
+          /tmp/check/bin/careercraft-mcp --version
+          /tmp/check/bin/careercraft-mcp doctor
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npm run build
