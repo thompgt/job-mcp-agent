@@ -1,0 +1,187 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "careercraft-mcp"
+version = "0.1.0"
+description = "An MCP server for job search, resume parsing, job matching and cover letters — runs fully local."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Thomas Pequegnot", email = "thomas.pequegnot04@gmail.com" }]
+keywords = ["mcp", "model-context-protocol", "jobs", "resume", "ats", "career", "ollama"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Office/Business",
+  "Typing :: Typed",
+]
+
+# Deliberately tiny. Everything heavy is an extra — see docs/MIGRATION-PLAN.md
+# section 5. `uvx careercraft-mcp` must be usable in seconds.
+dependencies = [
+  "fastmcp>=2.10,<3",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.6",
+  "httpx>=0.27",
+  "anyio>=4.4",
+  "platformdirs>=4.3",
+  "structlog>=24.4",
+  "typing-extensions>=4.12",
+]
+
+[project.optional-dependencies]
+# PDF and Word text extraction.
+pdf = ["pypdf>=5.0", "pymupdf>=1.24", "python-docx>=1.1"]
+# spaCy NER, used only to improve candidate-name detection.
+nlp = ["spacy>=3.7,<4"]
+# Scanned-PDF fallback. Also needs the tesseract and poppler binaries.
+ocr = ["pytesseract>=0.3.10", "pdf2image>=1.17", "pillow>=10.0"]
+# Semantic matching. Pulls torch: ~2.5 GB.
+embeddings = ["sentence-transformers>=3.0", "numpy>=1.26"]
+# The HTTP API that backs the web UI.
+api = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "python-multipart>=0.0.9"]
+
+all = [
+  "careercraft-mcp[pdf]",
+  "careercraft-mcp[nlp]",
+  "careercraft-mcp[ocr]",
+  "careercraft-mcp[embeddings]",
+  "careercraft-mcp[api]",
+]
+
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "pytest-cov>=5.0",
+  "respx>=0.21",
+  "ruff>=0.7",
+  "mypy>=1.13",
+  "pre-commit>=4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/tpequegnot/careercraft-mcp"
+Repository = "https://github.com/tpequegnot/careercraft-mcp"
+Issues = "https://github.com/tpequegnot/careercraft-mcp/issues"
+Changelog = "https://github.com/tpequegnot/careercraft-mcp/blob/main/CHANGELOG.md"
+
+[project.scripts]
+careercraft-mcp = "careercraft.cli:main"
+careercraft = "careercraft.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/careercraft"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/README.md", "/LICENSE", "/CHANGELOG.md"]
+
+# ---------------------------------------------------------------- ruff
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E", "W",    # pycodestyle
+  "F",         # pyflakes
+  "I",         # isort
+  "UP",        # pyupgrade
+  "B",         # bugbear
+  "C4",        # comprehensions
+  "SIM",       # simplify
+  "TID",       # tidy-imports (enforces the layering rule)
+  "RUF",
+  "S",         # bandit
+  "ASYNC",
+]
+ignore = [
+  "E501",    # line length is handled by the formatter
+  "S101",    # assert is fine
+  "B008",    # FastAPI's Depends() in defaults is idiomatic
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "ASYNC", "TID251"]
+"scripts/**" = ["S"]
+# The layering rule below is a rule about the *core*. These are the layers
+# whose entire job is to own one of the banned imports.
+"src/careercraft/mcp/**" = ["TID251"]
+"src/careercraft/api/**" = ["TID251"]
+"src/careercraft/adapters/storage/**" = ["TID251"]
+"src/careercraft/cli.py" = ["TID251"]
+# Resume text is full of en dashes, hyphen bullets and multiplication signs,
+# and the parser has to match the characters that are actually there.
+"src/careercraft/core/resume/parse.py" = ["RUF001"]
+"src/careercraft/core/resume/extract.py" = ["RUF001"]
+
+# The layering rule from docs/MIGRATION-PLAN.md section 3: the domain core
+# must stay free of transport, storage and framework imports so it can be
+# unit-tested and reused without any of them installed. Enforced everywhere
+# except the adapter layers exempted above, so a stray `import fastmcp` in
+# core/ is a lint failure rather than a design decision nobody noticed.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"fastmcp".msg = "core/** must not import transport libraries; keep this in careercraft.mcp"
+"fastapi".msg = "core/** must not import web frameworks; keep this in careercraft.api"
+"sqlite3".msg = "core/** must not touch storage; keep this in careercraft.adapters.storage"
+
+[tool.ruff.lint.isort]
+known-first-party = ["careercraft"]
+
+# ---------------------------------------------------------------- mypy
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src/careercraft"]
+strict = true
+warn_unreachable = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = [
+  "spacy.*", "fitz", "pypdf.*", "docx.*", "pytesseract.*", "pdf2image.*",
+  "sentence_transformers.*", "numpy.*",
+]
+ignore_missing_imports = true
+
+# Optional-dependency shims do runtime feature detection; strict mode fights it.
+[[tool.mypy.overrides]]
+module = ["careercraft.core.resume.extract", "careercraft.core.matching.embedding"]
+disallow_any_expr = false
+warn_return_any = false
+
+# ---------------------------------------------------------------- pytest
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+  "requires_nlp: needs the [nlp] extra",
+  "requires_pdf: needs the [pdf] extra",
+  "requires_embeddings: needs the [embeddings] extra",
+  "requires_ollama: needs a running Ollama daemon",
+]
+filterwarnings = ["error", "ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["src/careercraft"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]
