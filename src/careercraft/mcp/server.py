@@ -1,4 +1,4 @@
-"""The MCP server.
+﻿"""The MCP server.
 
 This is the primary interface to CareerCraft: seven tools, six resources and
 three prompts over :class:`~careercraft.service.CareerCraftService`.
@@ -214,7 +214,7 @@ def build_server(
         ] = "",
         location: str = "",
         top_k: Annotated[int, Field(ge=1, le=50)] = 10,
-        min_score: Annotated[float, Field(ge=0.0, le=1.0)] = 0.25,
+        min_score: Annotated[float, Field(ge=0.0, le=1.0)] = 0.15,
         strategy: Annotated[
             Strategy, Field(description="'auto' picks embeddings when installed, else keyword.")
         ] = "auto",

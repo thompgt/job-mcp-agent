@@ -1,56 +1,48 @@
-version: '3.8'
+# Two services, both published on loopback only.
+#
+# Ollama is deliberately not a service here. Most people who want it already
+# have it installed with their models pulled, and shipping a third container
+# that re-downloads several gigabytes would be worse than pointing at theirs.
+# Everything except letter *prose* works without it.
 
 services:
-  mongo:
-    image: mongo:6.0
-    restart: unless-stopped
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo_data:/data/db
-
   api:
     build:
       context: .
-      dockerfile: server/Dockerfile
-    command: uvicorn server.app.main:app --host 0.0.0.0 --port 8002
+      dockerfile: Dockerfile
+    # 127.0.0.1: prefix, not just "8000:8000" — the short form publishes on
+    # every interface, which on a laptop on a café network means the whole
+    # café can read your resumes.
     ports:
-      - "8002:8002"
-    depends_on:
-      - mongo
+      - "127.0.0.1:8000:8000"
     environment:
-      - MONGO_HOST=mongo
-      - MONGO_PORT=27017
-      # Ollama runs on the host, not in the compose network.
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-    extra_hosts:
-      # host.docker.internal is built in on Docker Desktop; Linux needs this.
-      - "host.docker.internal:host-gateway"
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      CAREERCRAFT_OLLAMA_MODEL: ${CAREERCRAFT_OLLAMA_MODEL:-llama3.2:1b}
+      CAREERCRAFT_CORS_ORIGINS: http://localhost:3000
+      CAREERCRAFT_LOG_LEVEL: ${CAREERCRAFT_LOG_LEVEL:-INFO}
     volumes:
-      - ./:/app
-    healthcheck:
-      test: ["CMD-SHELL","curl -f http://localhost:8002/mcp || curl -f http://localhost:8002/ || exit 1"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+      - careercraft-data:/data
+    extra_hosts:
+      # Linux does not resolve host.docker.internal by default.
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
 
-  frontend:
+  web:
     build:
-      context: .
-      dockerfile: Dockerfile.frontend
-    command: python web_frontend.py
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        # Next.js inlines NEXT_PUBLIC_* at build time, so this is a build arg
+        # as well as an environment variable.
+        NEXT_PUBLIC_API_URL: http://localhost:8000
     ports:
-      - "8000:8000"
-    depends_on:
-      - api
+      - "127.0.0.1:3000:3000"
     environment:
-      - MONGO_HOST=mongo
-      - MONGO_PORT=27017
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - ./:/app
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
-  mongo_data:
+  careercraft-data:

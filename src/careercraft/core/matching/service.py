@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from careercraft.core.matching import embedding, keyword
-from careercraft.core.matching.heuristics import candidate_is_junior, filter_jobs
+from careercraft.core.matching.heuristics import candidate_is_junior, filter_jobs_explained
 from careercraft.errors import DependencyMissing
 from careercraft.models import Job, JobMatch, MatchResult, ParsedResume, Strategy
 
@@ -27,7 +27,12 @@ def rank_jobs(
     jobs: list[Job],
     *,
     top_k: int = 10,
-    min_score: float = 0.25,
+    # Recalibrated when the keyword scorer moved from raw coverage to the
+    # harmonic mean of coverage and recall. That change is right — a posting
+    # naming one skill you have is not a better match than one naming seven —
+    # but it compresses the top of the range, and 0.25 against real postings
+    # was returning two results where five were worth seeing.
+    min_score: float = 0.15,
     strategy: Strategy = "auto",
     filter_seniority: bool = True,
     embedding_model: str = "all-MiniLM-L6-v2",
@@ -46,10 +51,18 @@ def rank_jobs(
         resolved = "keyword"
 
     junior = candidate_is_junior(resume)
-    kept, dropped = filter_jobs(resume, jobs, filter_seniority=filter_seniority)
+    kept, dropped_by_reason = filter_jobs_explained(
+        resume, jobs, filter_seniority=filter_seniority
+    )
+    dropped = sum(dropped_by_reason.values())
     if dropped:
+        breakdown = ", ".join(
+            f"{count} {reason}"
+            for reason, count in sorted(dropped_by_reason.items(), key=lambda kv: -kv[1])
+        )
         notes.append(
-            f"Filtered out {dropped} posting(s) as senior-level or requiring a higher degree."
+            f"Filtered out {dropped} of {len(jobs)} postings: {breakdown}. "
+            "Pass filter_seniority=false to include them."
         )
 
     if not kept:

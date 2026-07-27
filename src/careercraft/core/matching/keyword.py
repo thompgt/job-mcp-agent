@@ -226,10 +226,26 @@ class KeywordScorer:
             text_score = _cosine(resume_vector, self._job_vectors[index])
             matched, missing = skill_overlap(resume.skills, self._job_texts[index])
 
-            total_skills = len(matched) + len(missing)
-            if total_skills:
-                coverage = len(matched) / total_skills
-                score = self.SKILL_WEIGHT * coverage + (1 - self.SKILL_WEIGHT) * text_score
+            posting_skills = len(matched) + len(missing)
+            if posting_skills:
+                # Coverage on its own rewards *sparse* postings: a listing that
+                # names one skill you happen to have scores a perfect 1.0,
+                # beating one that names seven of yours alongside eight you
+                # lack. Observed live — a generic "Online Data Analyst" ad
+                # sharing one skill outranked an ML engineering role sharing
+                # seven.
+                #
+                # So pair it with recall — how much of the candidate's skill
+                # set the posting actually engages — and take the harmonic
+                # mean. A posting has to be both a good fit for the candidate
+                # and well covered by them to score highly, and one lucky
+                # keyword cannot carry it.
+                coverage = len(matched) / posting_skills
+                recall = len(matched) / len(resume.skills) if resume.skills else 0.0
+                skill_score = (
+                    2 * coverage * recall / (coverage + recall) if (coverage + recall) else 0.0
+                )
+                score = self.SKILL_WEIGHT * skill_score + (1 - self.SKILL_WEIGHT) * text_score
             else:
                 # The posting names no recognisable skills, so coverage is
                 # undefined rather than zero — scoring it 0 would bury every
@@ -240,12 +256,25 @@ class KeywordScorer:
         return results
 
 
+def _listing(items: list[str], limit: int) -> str:
+    """Join a list, and say so when it was truncated.
+
+    "Shares 7 skills: A, B, C, D, E" reads as a contradiction — either the
+    count is wrong or two skills went missing. Saying "and 2 more" costs
+    nothing and stops the sentence from undermining itself.
+    """
+    shown = ", ".join(items[:limit])
+    extra = len(items) - limit
+    return f"{shown} and {extra} more" if extra > 0 else shown
+
+
 def explain(score: float, matched: list[str], missing: list[str]) -> str:
     """One line the host model can show a user without post-processing."""
     if matched:
-        head = f"Shares {len(matched)} skill(s): {', '.join(matched[:5])}"
+        noun = "skill" if len(matched) == 1 else "skills"
+        head = f"Shares {len(matched)} {noun}: {_listing(matched, 5)}"
     else:
         head = "No overlapping skills detected; ranked on wording similarity"
     if missing:
-        head += f". Posting also asks for {', '.join(missing[:4])}"
+        head += f". Posting also asks for {_listing(missing, 4)}"
     return f"{head}. Score {score:.2f}."

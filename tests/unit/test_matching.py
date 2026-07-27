@@ -48,10 +48,56 @@ def test_non_senior_titles_are_not(title):
     assert not job_is_senior(_job(title))
 
 
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Data Architecture Analyst",  # 'architect' is a substring of 'architecture'
+        "Lead Generation Specialist",  # 'lead' is not the seniority sense here
+        "Team Leader Support Associate",  # 'leader', not 'lead'
+    ],
+)
+def test_senior_terms_are_not_matched_as_substrings(title):
+    assert not job_is_senior(_job(title))
+
+
+def test_the_description_does_not_decide_seniority():
+    """Nearly every posting mentions senior colleagues; none of that is the role."""
+    job = _job(
+        "Data Analyst",
+        "You will report to a senior manager and work with our principal engineers.",
+    )
+    assert not job_is_senior(job)
+
+
+def test_the_boards_own_level_field_is_respected():
+    assert job_is_senior(_job("Database Engineer", level="Senior"))
+
+
 def test_degree_requirements_are_read_from_the_description():
     assert job_requires_masters(_job("Analyst", "Master's degree required."))
     assert job_requires_phd(_job("Scientist", "PhD in a quantitative field required."))
     assert not job_requires_phd(_job("Analyst", "Bachelor's degree required."))
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "Bachelor's degree required. Master's degree preferred.",
+        "MS in a quantitative field or equivalent experience.",
+        "PhD is a plus.",
+        "Advanced degree (Master's) nice to have.",
+        "Bachelor's or Master's degree in a related field.",
+    ],
+)
+def test_a_preferred_degree_is_not_a_gate(description):
+    """'Master's preferred' must not hide a posting from a bachelor's graduate."""
+    job = _job("Data Analyst", description)
+    assert not (job_requires_masters(job) or job_requires_phd(job))
+
+
+def test_a_requirement_in_one_clause_survives_a_preference_in_another():
+    job = _job("Research Scientist", "PhD required. Publications preferred.")
+    assert job_requires_phd(job)
 
 
 def test_highest_degree_ranks_the_ladder(resume_text, senior_resume_text):
@@ -114,6 +160,31 @@ def test_keyword_scorer_reports_matched_and_missing(resume_text):
     assert {"Kubernetes", "Terraform"} <= set(missing)
 
 
+def test_a_sparse_posting_does_not_beat_a_rich_one(resume_text):
+    """One lucky keyword must not outrank a genuinely close match.
+
+    Observed against the live job board: a generic listing naming a single
+    skill the candidate had scored 0.58, while an ML engineering role sharing
+    seven scored 0.29 — because coverage alone is 1.0 when a posting names one
+    thing and you have it.
+    """
+    resume = parse_resume_text(resume_text)
+    sparse = _job("Online Data Analyst", "Some familiarity with machine learning helps.")
+    rich = _job(
+        "Applied Data Scientist",
+        "Python, SQL, PyTorch, AWS, Airflow, pandas and scikit-learn. "
+        "Exposure to Snowflake, dbt, Databricks and BigQuery is useful.",
+    )
+    scores = dict(
+        zip(
+            [sparse.title, rich.title],
+            [s for s, _, _ in KeywordScorer([sparse, rich]).score_all(resume)],
+            strict=True,
+        )
+    )
+    assert scores["Applied Data Scientist"] > scores["Online Data Analyst"]
+
+
 def test_scores_stay_in_range(resume_text):
     resume = parse_resume_text(resume_text)
     jobs = [_job("A", "Python SQL"), _job("B", "Nothing relevant at all")]
@@ -162,6 +233,37 @@ def test_rank_jobs_explains_a_total_filter_wipeout(resume_text):
     assert result.matches == []
     assert result.jobs_filtered_out == 1
     assert result.notes
+
+
+def test_the_rationale_admits_when_it_truncates(resume_text):
+    """'Shares 7 skills: A, B, C, D, E' reads as a contradiction."""
+    from careercraft.core.matching.keyword import explain
+
+    line = explain(0.5, ["A", "B", "C", "D", "E", "F", "G"], ["X", "Y", "Z", "W", "V"])
+    assert "and 2 more" in line
+    assert "and 1 more" in line
+
+
+def test_one_shared_skill_is_singular(resume_text):
+    from careercraft.core.matching.keyword import explain
+
+    assert "Shares 1 skill:" in explain(0.5, ["Python"], [])
+
+
+def test_the_filter_note_says_why_not_just_how_many(resume_text):
+    """A 90% drop rate with no reason reads as a bug."""
+    resume = parse_resume_text(resume_text)
+    jobs = [
+        _job("Senior Data Engineer"),
+        _job("Director of Analytics"),
+        _job("Research Scientist", "PhD required."),
+        _job("Data Analyst", "Python and SQL."),
+    ]
+    result = rank_jobs(resume, jobs, min_score=0.0, strategy="keyword")
+    note = " ".join(result.notes)
+    assert "senior or management" in note
+    assert "doctorate" in note
+    assert "filter_seniority=false" in note
 
 
 def test_top_k_is_respected(resume_text):

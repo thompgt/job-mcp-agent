@@ -26,6 +26,10 @@ coverage.xml
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
 
+# Scratch work and stale v1 screenshots kept locally, not shipped
+notebooks/
+docs/assets/screenshot-*.png
+
 # Editor directories and files
 .vscode/
 .idea/

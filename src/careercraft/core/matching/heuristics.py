@@ -16,10 +16,10 @@ from careercraft.models import Job, ParsedResume
 SENIOR_TERMS = (
     "senior",
     "sr.",
-    "sr ",
+    "sr",
     "staff",
     "principal",
-    "lead ",
+    "lead",
     "manager",
     "director",
     "vp",
@@ -28,9 +28,30 @@ SENIOR_TERMS = (
     "architect",
 )
 
+#: Matched on word boundaries rather than as substrings. Plain ``in`` checks
+#: made "architect" fire on "architecture" and "lead" on "lead time", so roles
+#: that were not senior at all were dropped from a graduate's results with no
+#: way to see why.
+_SENIOR_RE = re.compile(
+    r"(?<![A-Za-z])(?:" + "|".join(re.escape(t) for t in SENIOR_TERMS) + r")(?![A-Za-z])",
+    re.IGNORECASE,
+)
+
+#: Phrases where a seniority word is doing a different job. Word boundaries
+#: cannot separate "Lead Generation Specialist" — an entry-level sales role —
+#: from "Lead Data Engineer", so the phrase is removed before matching.
+_NOT_SENIORITY = (
+    "lead generation",
+    "lead gen",
+    "leads",
+    "solution architect intern",
+    "account manager assistant",
+)
+
 _MASTERS_TERMS = (
     "master's",
     "masters degree",
+    "master's degree",
     "ms degree",
     "m.s.",
     "m.sc",
@@ -42,6 +63,32 @@ _MASTERS_TERMS = (
 )
 _PHD_TERMS = ("phd", "ph.d", "doctorate", "doctoral degree")
 
+#: Phrases that turn a stated degree into a preference rather than a gate.
+#: "Master's degree preferred" and "MS or equivalent experience" are not
+#: reasons to hide a posting from someone with a bachelor's — treating them as
+#: such was dropping ordinary analyst roles from a new graduate's results.
+_SOFTENERS = (
+    "preferred",
+    "prefer ",
+    "a plus",
+    "plus:",
+    "nice to have",
+    "nice-to-have",
+    "bonus",
+    "desirable",
+    "ideally",
+    "or equivalent",
+    "equivalent experience",
+    "equivalent practical",
+    "advantage",
+)
+
+#: A bachelor's named alongside the higher degree means the higher one is an
+#: alternative, not a floor.
+_BACHELOR_TERMS = ("bachelor", "b.s.", "bs degree", "b.sc", "bsc", "undergraduate degree")
+
+_SENTENCE_SPLIT = re.compile(r"[.;\n•]")
+
 _YEAR_RE = re.compile(r"(?:19|20)\d{2}")
 
 #: Degree ladder used by both the resume side and the posting side.
@@ -49,18 +96,43 @@ UNKNOWN, BACHELOR, MASTER, DOCTORATE = 0, 1, 2, 3
 
 
 def job_is_senior(job: Job) -> bool:
+    """Whether the title or the board's own level marks this as senior.
+
+    The description is deliberately not consulted: almost every posting
+    mentions senior colleagues, senior stakeholders or a senior leadership
+    team, and none of that says anything about the role being advertised.
+    """
     combined = f"{job.title} {job.level}".lower()
-    return any(term in combined for term in SENIOR_TERMS)
+    for phrase in _NOT_SENIORITY:
+        combined = combined.replace(phrase, " ")
+    return bool(_SENIOR_RE.search(combined))
+
+
+def _demands_degree(text: str, terms: tuple[str, ...]) -> bool:
+    """Whether ``text`` makes one of ``terms`` a requirement, not a preference.
+
+    Checked one clause at a time. A posting routinely says "Bachelor's degree
+    required; Master's preferred" in a single sentence, and reading the whole
+    description as one blob turns that into a hard master's gate.
+    """
+    lowered = text.lower()
+    for clause in _SENTENCE_SPLIT.split(lowered):
+        if not any(term in clause for term in terms):
+            continue
+        if any(soft in clause for soft in _SOFTENERS):
+            continue
+        if any(bachelor in clause for bachelor in _BACHELOR_TERMS):
+            continue  # named as one option among several
+        return True
+    return False
 
 
 def job_requires_masters(job: Job) -> bool:
-    text = f"{job.description} {job.title}".lower()
-    return any(term in text for term in _MASTERS_TERMS)
+    return _demands_degree(f"{job.title}. {job.description}", _MASTERS_TERMS)
 
 
 def job_requires_phd(job: Job) -> bool:
-    text = f"{job.description} {job.title}".lower()
-    return any(term in text for term in _PHD_TERMS)
+    return _demands_degree(f"{job.title}. {job.description}", _PHD_TERMS)
 
 
 def highest_degree(resume: ParsedResume) -> int:
@@ -98,8 +170,8 @@ def candidate_is_junior(resume: ParsedResume, *, now: datetime | None = None) ->
     filtering senior roles out of a senior person's results is far more
     damaging than leaving a few senior roles in a graduate's.
     """
-    titles = " ".join(entry.title.lower() for entry in resume.experience)
-    if any(term in titles for term in SENIOR_TERMS):
+    titles = " ".join(entry.title for entry in resume.experience)
+    if _SENIOR_RE.search(titles):
         return False
 
     degree = highest_degree(resume)
@@ -134,19 +206,44 @@ def filter_jobs(
 
     Returns ``(kept, dropped_count)``.
     """
+    kept, dropped = filter_jobs_explained(resume, jobs, filter_seniority=filter_seniority)
+    return kept, sum(dropped.values())
+
+
+def filter_jobs_explained(
+    resume: ParsedResume,
+    jobs: list[Job],
+    *,
+    filter_seniority: bool = True,
+) -> tuple[list[Job], dict[str, int]]:
+    """As :func:`filter_jobs`, but with a breakdown of why postings went.
+
+    On a real search this filter can remove most of the pool — a query for
+    "data" returns a great many Senior and Director roles — and "46 filtered
+    out" with no reason reads like a bug. The breakdown is what makes the
+    number believable, and tells the user whether to turn the filter off.
+    """
     if not filter_seniority:
-        return list(jobs), 0
+        return list(jobs), {}
 
     junior = candidate_is_junior(resume)
     degree = highest_degree(resume)
 
     kept: list[Job] = []
+    dropped: dict[str, int] = {}
     for job in jobs:
+        reason: str | None = None
         if junior and job_is_senior(job):
-            continue
-        if degree <= BACHELOR and (job_requires_phd(job) or job_requires_masters(job)):
-            continue
-        if degree == MASTER and job_requires_phd(job):
-            continue
-        kept.append(job)
-    return kept, len(jobs) - len(kept)
+            reason = "senior or management roles"
+        elif degree <= BACHELOR and job_requires_phd(job):
+            reason = "roles requiring a doctorate"
+        elif degree <= BACHELOR and job_requires_masters(job):
+            reason = "roles requiring a master's"
+        elif degree == MASTER and job_requires_phd(job):
+            reason = "roles requiring a doctorate"
+
+        if reason is None:
+            kept.append(job)
+        else:
+            dropped[reason] = dropped.get(reason, 0) + 1
+    return kept, dropped

@@ -1,4 +1,4 @@
-"""The application service.
+﻿"""The application service.
 
 One object that owns the store, the job provider and the language model, and
 implements every operation the product offers. Both the MCP server and the
@@ -297,7 +297,7 @@ class CareerCraftService:
         query: str = "",
         location: str = "",
         top_k: int = 10,
-        min_score: float = 0.25,
+        min_score: float = 0.15,
         strategy: Strategy = "auto",
         filter_seniority: bool = True,
         pool_size: int = 50,
