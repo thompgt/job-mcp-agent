@@ -1,4 +1,4 @@
-﻿"""Structured parsing of resume text.
+"""Structured parsing of resume text.
 
 The heuristics here are ported from v1's ``resume_parser.py`` with their
 behaviour intact — they were tuned against real documents and rewriting them

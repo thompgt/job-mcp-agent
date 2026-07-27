@@ -15,7 +15,7 @@ import sys
 from collections.abc import Sequence
 
 from careercraft import __version__
-from careercraft.errors import CareerCraftError
+from careercraft.errors import CareerCraftError, DependencyMissing
 from careercraft.logging import configure_logging, get_logger
 from careercraft.settings import Settings, get_settings
 
@@ -47,6 +47,11 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default=None, help="HTTP bind address. Default 127.0.0.1.")
     serve.add_argument("--port", type=int, default=None, help="HTTP port. Default 8000.")
     serve.add_argument("--path", default=None, help="HTTP mount path. Default /mcp.")
+
+    api = sub.add_parser("api", help="Run the HTTP API that backs the web UI.")
+    api.add_argument("--host", default=None, help="Bind address. Default 127.0.0.1.")
+    api.add_argument("--port", type=int, default=None, help="Port. Default 8000.")
+    api.add_argument("--reload", action="store_true", help="Reload on source changes.")
 
     sub.add_parser("doctor", help="Report what this install can do, and what is missing.")
     sub.add_parser("info", help="Print resolved settings as JSON.")
@@ -97,6 +102,30 @@ def _cmd_serve(settings: Settings) -> int:
         # show_banner=False is load-bearing: the banner would go to stdout and
         # corrupt the very first JSON-RPC frame.
         server.run(transport="stdio", show_banner=False)
+    return 0
+
+
+def _cmd_api(settings: Settings) -> int:
+    try:
+        import uvicorn
+    except ImportError as exc:  # pragma: no cover - depends on the install
+        raise DependencyMissing("The HTTP API", "api") from exc
+
+    # The API is transport-independent, but check_bind_safety keys off it, and
+    # exposing this on a routable interface has exactly the same consequences
+    # as exposing the MCP server there.
+    settings.transport = "http"
+    settings.check_bind_safety()
+    settings.ensure_dirs()
+
+    log.info("api.starting", url=f"http://{settings.host}:{settings.port}/docs")
+    uvicorn.run(
+        "careercraft.api.app:app",
+        host=settings.host,
+        port=settings.port,
+        log_config=None,  # our structlog handlers already own stderr
+        access_log=False,
+    )
     return 0
 
 
@@ -166,6 +195,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if command == "serve":
             return _cmd_serve(settings)
+        if command == "api":
+            return _cmd_api(settings)
         if command == "doctor":
             return _cmd_doctor(settings)
         if command == "info":
