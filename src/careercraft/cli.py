@@ -51,7 +51,11 @@ def _parser() -> argparse.ArgumentParser:
     api = sub.add_parser("api", help="Run the HTTP API that backs the web UI.")
     api.add_argument("--host", default=None, help="Bind address. Default 127.0.0.1.")
     api.add_argument("--port", type=int, default=None, help="Port. Default 8000.")
-    api.add_argument("--reload", action="store_true", help="Reload on source changes.")
+    api.add_argument(
+        "--reload",
+        action="store_true",
+        help="Restart on source changes. For development; needs the [api] extra's watchfiles.",
+    )
 
     sub.add_parser("doctor", help="Report what this install can do, and what is missing.")
     sub.add_parser("info", help="Print resolved settings as JSON.")
@@ -105,7 +109,7 @@ def _cmd_serve(settings: Settings) -> int:
     return 0
 
 
-def _cmd_api(settings: Settings) -> int:
+def _cmd_api(settings: Settings, *, reload: bool = False) -> int:
     try:
         import uvicorn
     except ImportError as exc:  # pragma: no cover - depends on the install
@@ -118,11 +122,15 @@ def _cmd_api(settings: Settings) -> int:
     settings.check_bind_safety()
     settings.ensure_dirs()
 
-    log.info("api.starting", url=f"http://{settings.host}:{settings.port}/docs")
+    log.info("api.starting", url=f"http://{settings.host}:{settings.port}/docs", reload=reload)
+    # The app is passed as an import string rather than an object precisely so
+    # that reload=True can work: the reloader re-imports it in a fresh child
+    # process on every change, and cannot do that with an already-built object.
     uvicorn.run(
         "careercraft.api.app:app",
         host=settings.host,
         port=settings.port,
+        reload=reload,
         log_config=None,  # our structlog handlers already own stderr
         access_log=False,
     )
@@ -199,7 +207,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if command == "serve":
             return _cmd_serve(settings)
         if command == "api":
-            return _cmd_api(settings)
+            return _cmd_api(settings, reload=args.reload)
         if command == "doctor":
             return _cmd_doctor(settings)
         if command == "info":
