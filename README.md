@@ -115,7 +115,8 @@ the prose.
   job ids so refetching does not duplicate rows.
 - Security posture as code: allow-listed filesystem roots with symlink-resolved
   containment checks, `path=` rejected outright over HTTP, and a startup guard
-  that *refuses* a non-loopback bind without an auth token.
+  that *refuses* a non-loopback bind without an auth token. Scraped posting
+  text is fenced and labelled as data before it reaches any model.
 - Docker + Compose (loopback-only published ports), pre-commit, and a GitHub
   Actions matrix across 3 OSes × Python 3.10/3.13 — including a base-install-only
   job, since "the extras are optional" is a claim that has to be tested.

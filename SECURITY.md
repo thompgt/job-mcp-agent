@@ -44,9 +44,14 @@ warning every time it is used.
 ## What is out of scope
 
 - **Prompt injection through job postings.** Postings are third-party text
-  that reaches your model. CareerCraft strips HTML but does not attempt to
-  neutralise instructions embedded in a description. Treat generated letters
-  as drafts and read them.
+  that reaches your model, and stripping HTML removes tags, not instructions.
+  CareerCraft now fences posting text between
+  `-----BEGIN/END UNTRUSTED JOB POSTING-----` markers, defangs any copy of
+  those markers found inside the posting so it cannot close its own fence,
+  and tells both the cover-letter model and the MCP host that the fenced span
+  is data. That is defence in depth, not a guarantee — no delimiter scheme
+  makes a language model immune. Treat generated letters as drafts and read
+  them.
 - **Ollama itself.** If you point `OLLAMA_BASE_URL` at a remote daemon, your
   resume text goes to that host. That is your decision to make; the default
   is loopback.
