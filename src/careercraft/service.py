@@ -398,6 +398,22 @@ class CareerCraftService:
     async def llm_available(self) -> bool:
         return await self.llm.is_available()
 
+    async def llm_status(self) -> tuple[bool, str | None]:
+        """``(ready, hint)`` — and when not ready, *why* not.
+
+        "Install Ollama" and "pull the model you configured" are different
+        problems with different fixes, and a capability report that cannot
+        tell them apart sends people to reinstall software they already have.
+        """
+        if await self.llm.is_available():
+            return True, None
+
+        reachable = getattr(self.llm, "daemon_reachable", None)
+        if reachable is not None and await reachable():
+            model = getattr(self.llm, "model", self.settings.ollama_model)
+            return False, f"Ollama is running but has no model {model!r}. Run `ollama pull {model}`"
+        return False, "Install Ollama from https://ollama.com, then `ollama serve`"
+
     async def stats(self) -> dict[str, int]:
         return await self.store.stats()
 

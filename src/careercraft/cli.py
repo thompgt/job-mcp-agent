@@ -135,12 +135,15 @@ def _cmd_doctor(settings: Settings) -> int:
     from careercraft.capabilities import collect
     from careercraft.service import build_service
 
-    async def probe() -> bool:
+    async def probe() -> tuple[bool, str | None]:
         service = build_service(settings)
-        return await service.llm_available()
+        try:
+            return await service.llm_status()
+        finally:
+            await service.shutdown()
 
-    reachable = anyio.run(probe)
-    report = collect(transport=settings.transport, ollama_reachable=reachable)
+    ready, hint = anyio.run(probe)
+    report = collect(transport=settings.transport, ollama_reachable=ready, ollama_hint=hint)
 
     print(f"careercraft-mcp {report.version}  (python {report.python})")
     print(f"data dir: {settings.data_dir}")

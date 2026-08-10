@@ -309,10 +309,8 @@ def build_server(
         mime_type="application/json",
     )
     async def capabilities_resource() -> Capabilities:
-        return collect(
-            transport=resolved.transport,
-            ollama_reachable=await svc.llm_available(),
-        )
+        ready, hint = await svc.llm_status()
+        return collect(transport=resolved.transport, ollama_reachable=ready, ollama_hint=hint)
 
     @mcp.resource(
         "careercraft://resumes",

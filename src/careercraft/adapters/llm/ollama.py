@@ -68,7 +68,18 @@ class OllamaProvider:
         return response
 
     async def is_available(self) -> bool:
-        """True when the daemon answers. Never raises."""
+        """True when a letter can actually be generated. Never raises.
+
+        A reachable daemon is not enough. A fresh Ollama install answers
+        ``/api/tags`` perfectly well with an empty model list, so probing only
+        for reachability made ``careercraft doctor`` report letter writing as
+        available and then fail on the first request with a 404 — which is the
+        opposite of what the capability report is for.
+        """
+        return self.model in set(await self.list_models())
+
+    async def daemon_reachable(self) -> bool:
+        """Whether the daemon answers at all, regardless of models."""
         try:
             await self._request("GET", "/api/tags", _PROBE_TIMEOUT)
         except Exception:

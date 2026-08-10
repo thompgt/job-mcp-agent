@@ -60,7 +60,8 @@ async def health(service: ServiceDep) -> HealthResponse:
 @router.get("/capabilities", response_model=Capabilities, tags=["meta"])
 async def capabilities(service: ServiceDep, settings: SettingsDep) -> Capabilities:
     """Which optional features this install has, and how to enable the rest."""
-    return collect(transport="http", ollama_reachable=await service.llm_available())
+    ready, hint = await service.llm_status()
+    return collect(transport="http", ollama_reachable=ready, ollama_hint=hint)
 
 
 # ------------------------------------------------------------------ jobs
