@@ -458,6 +458,7 @@ servers. Copy `.env.example` to `.env` for local development, or use the host's
 | `CAREERCRAFT_ENABLE_OCR` | `1` | Try OCR when a PDF yields almost no text |
 | `CAREERCRAFT_JOBICY_BASE_URL` | `https://jobicy.com/api/v2/remote-jobs` | Job source |
 | `CAREERCRAFT_JOB_CACHE_TTL_SECONDS` | `3600` | How long a cached search stays fresh |
+| `CAREERCRAFT_RETENTION_DAYS` | `30` | How long fetched postings are kept; `0` keeps everything |
 | `CAREERCRAFT_TRANSPORT` | `stdio` | `stdio` or `http` |
 | `CAREERCRAFT_HOST` / `CAREERCRAFT_PORT` / `CAREERCRAFT_HTTP_PATH` | `127.0.0.1` / `8000` / `/mcp` | HTTP bind |
 | `CAREERCRAFT_AUTH_TOKEN` | *(none)* | Bearer token; **required** to bind anything but loopback |
@@ -476,6 +477,8 @@ servers. Copy `.env.example` to `.env` for local development, or use the host's
 - **Local paths are refused entirely over HTTP** — upload instead.
 - **The server refuses to expose itself unsafely.** Binding to a non-loopback
   address without `CAREERCRAFT_AUTH_TOKEN` is an error, not a warning.
+- **Fetched postings are pruned at startup** after `CAREERCRAFT_RETENTION_DAYS`, except any you saved or wrote a letter for.
+  Deleting a resume deletes the letters generated from it, which quote it.
 - **Delete everything** by removing the data directory `careercraft info`
   reports.
 

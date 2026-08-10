@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sqlite3
+from datetime import datetime, timedelta, timezone
+
 import anyio
 
 from careercraft.adapters.storage import SqliteStore
@@ -129,3 +132,103 @@ async def test_stats_counts_each_table(store, resume_text):
     await store.save_letter("L1", CoverLetter(job_id=job.id))
     await store.save_job(job.id)
     assert await store.stats() == {"jobs": 1, "resumes": 1, "letters": 1, "saved_jobs": 1}
+
+
+# ------------------------------------------------------------- housekeeping
+
+
+def _age_rows(store: SqliteStore, table: str, column: str, days: int) -> None:
+    """Backdate every row so pruning has something old to find."""
+    stamp = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    with sqlite3.connect(store.path) as conn:
+        conn.execute(f"UPDATE {table} SET {column} = ?", (stamp,))
+
+
+async def test_deleting_a_resume_takes_its_letters_with_it(store, resume_text):
+    """A deleted resume used to leave letters quoting it behind."""
+    resume = parse_resume_text(resume_text)
+    resume.id = "r1"
+    await store.save_resume(resume)
+    await store.save_letter("L1", CoverLetter(job_id="j1", resume_id="r1", text="Dear team,"))
+    await store.save_letter("L2", CoverLetter(job_id="j2", text="Unrelated letter"))
+
+    assert await store.delete_resume("r1") is True
+    assert await store.get_letter("L1") is None
+    # A letter belonging to no resume is nobody's orphan.
+    assert await store.get_letter("L2") is not None
+
+
+async def test_deleting_a_missing_resume_deletes_nothing(store):
+    await store.save_letter("L1", CoverLetter(job_id="j1", resume_id="r1"))
+    assert await store.delete_resume("r-nope") is False
+    assert await store.get_letter("L1") is not None
+
+
+async def test_prune_drops_stale_postings(store):
+    old, fresh = _job("Old Role"), _job("Fresh Role")
+    await store.upsert_jobs([old])
+    _age_rows(store, "jobs", "fetched_at", days=90)
+    await store.upsert_jobs([fresh])
+
+    result = await store.prune(max_age_days=30)
+
+    assert result["jobs"] == 1
+    assert [j.title for j in await store.recent_jobs()] == ["Fresh Role"]
+
+
+async def test_prune_keeps_what_the_user_pointed_at(store):
+    saved, lettered, plain = _job("Saved"), _job("Lettered"), _job("Plain")
+    await store.upsert_jobs([saved, lettered, plain])
+    await store.save_job(saved.id, "apply Monday")
+    await store.save_letter("L1", CoverLetter(job_id=lettered.id))
+    _age_rows(store, "jobs", "fetched_at", days=90)
+
+    assert (await store.prune(max_age_days=30))["jobs"] == 1
+
+    titles = {j.title for j in await store.recent_jobs()}
+    assert titles == {"Saved", "Lettered"}
+
+
+async def test_prune_does_not_hollow_out_a_live_cache_entry(store):
+    """A cached search whose postings vanished would answer short."""
+    jobs = [_job("Cached Role")]
+    await store.upsert_jobs(jobs)
+    await store.cache_search("key1", jobs)
+    _age_rows(store, "jobs", "fetched_at", days=90)
+
+    assert (await store.prune(max_age_days=30))["jobs"] == 0
+    hit = await store.cached_search("key1", 3600)
+    assert hit is not None and [j.title for j in hit] == ["Cached Role"]
+
+
+async def test_prune_expires_old_cache_rows(store):
+    jobs = [_job("Cached Role")]
+    await store.upsert_jobs(jobs)
+    await store.cache_search("key1", jobs)
+    _age_rows(store, "search_cache", "created_at", days=90)
+
+    assert (await store.prune(max_age_days=30))["search_cache"] == 1
+    assert await store.cached_search("key1", 3600) is None
+
+
+async def test_prune_sweeps_up_letters_orphaned_before_the_cascade(store):
+    """Stores written before delete_resume cascaded still hold these."""
+    await store.save_letter("L1", CoverLetter(job_id="j1", resume_id="gone"))
+
+    assert (await store.prune(max_age_days=30))["orphaned_letters"] == 1
+    assert await store.get_letter("L1") is None
+
+
+async def test_prune_leaves_a_fresh_store_alone(store, resume_text):
+    resume = parse_resume_text(resume_text)
+    resume.id = "r1"
+    await store.save_resume(resume)
+    await store.upsert_jobs([_job()])
+    await store.save_letter("L1", CoverLetter(job_id="j1", resume_id="r1"))
+
+    assert await store.prune(max_age_days=30) == {
+        "jobs": 0,
+        "search_cache": 0,
+        "orphaned_letters": 0,
+    }
+    assert await store.stats() == {"jobs": 1, "resumes": 1, "letters": 1, "saved_jobs": 0}

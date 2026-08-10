@@ -85,6 +85,18 @@ class CareerCraftService:
         self.settings.ensure_dirs()
         await self.store.initialize()
 
+        # Housekeeping at startup rather than on a timer: this process is
+        # usually a short-lived MCP server spawned by a host, so there is no
+        # long-running loop to hang a scheduler off, and startup is the one
+        # moment nothing is waiting on a tool call. A failure here must never
+        # stop the server from serving — the store working is what matters,
+        # not the store being tidy.
+        if self.settings.retention_days > 0:
+            try:
+                await self.store.prune(self.settings.retention_days)
+            except Exception:
+                log.warning("startup.prune_failed", exc_info=True)
+
     async def shutdown(self) -> None:
         """Release the providers' connection pools.
 
