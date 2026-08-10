@@ -222,6 +222,19 @@ async def test_a_configured_token_is_required(token_client):
         assert ok.status_code == 200
 
 
+async def test_a_malformed_token_header_is_rejected_not_crashed(token_client):
+    """Near-misses and wrong schemes 401 rather than raising out of the check.
+
+    compare_digest is fussy — it raises TypeError on a str with non-ASCII and
+    is not length-agnostic in the obvious way — so the prefix, empty and
+    wrong-scheme cases are worth pinning.
+    """
+    async with token_client as c:
+        for value in ("", "s3cret", "Basic s3cret", "Bearer s3cre", "Bearer s3cretX"):
+            response = await c.get("/api/resumes", headers={"Authorization": value})
+            assert response.status_code == 401, value
+
+
 async def test_health_stays_open_so_probes_work(token_client):
     async with token_client as c:
         assert (await c.get("/api/health")).status_code == 200
