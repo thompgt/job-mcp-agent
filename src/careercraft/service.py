@@ -22,7 +22,7 @@ from careercraft.adapters.llm import NullProvider, OllamaProvider
 from careercraft.adapters.storage import SqliteStore
 from careercraft.core.jobs import JobicyProvider, JobProvider, JobQuery, MockProvider
 from careercraft.core.letters import generate_letter
-from careercraft.core.matching import rank_jobs
+from careercraft.core.matching import DEFAULT_MIN_SCORE, rank_jobs
 from careercraft.core.resume import extract_text, parse_resume_text
 from careercraft.core.resume.extract import LayoutLine
 from careercraft.core.resume.skills import load_extra_terms
@@ -297,7 +297,7 @@ class CareerCraftService:
         query: str = "",
         location: str = "",
         top_k: int = 10,
-        min_score: float = 0.15,
+        min_score: float = DEFAULT_MIN_SCORE,
         strategy: Strategy = "auto",
         filter_seniority: bool = True,
         pool_size: int = 50,
@@ -307,7 +307,8 @@ class CareerCraftService:
         """Rank postings against a resume, fetching a pool if needed."""
         if not 0.0 <= min_score <= 1.0:
             raise ValidationFailed(
-                "min_score must be between 0 and 1.", remedy="The default is 0.25."
+                "min_score must be between 0 and 1.",
+                remedy=f"The default is {DEFAULT_MIN_SCORE}.",
             )
 
         target = resume or await self.get_resume(resume_id)

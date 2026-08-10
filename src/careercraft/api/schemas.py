@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from careercraft.core.matching import DEFAULT_MIN_SCORE
 from careercraft.models import CoverLetter, Job, Length, Strategy, Tone
 
 
@@ -36,7 +37,7 @@ class MatchRequest(Body):
     query: str = ""
     location: str = ""
     top_k: int = Field(default=10, ge=1, le=50)
-    min_score: float = Field(default=0.15, ge=0.0, le=1.0)
+    min_score: float = Field(default=DEFAULT_MIN_SCORE, ge=0.0, le=1.0)
     strategy: Strategy = "auto"
     filter_seniority: bool = True
 

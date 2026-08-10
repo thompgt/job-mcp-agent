@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import pytest
 
+from careercraft.core.matching import DEFAULT_MIN_SCORE
 from careercraft.errors import NotFound, ValidationFailed
 
 
@@ -118,6 +120,22 @@ async def test_match_validates_min_score(service, resume_text):
     resume = await service.parse_resume(text=resume_text)
     with pytest.raises(ValidationFailed):
         await service.match_jobs(resume_id=resume.id, min_score=7.0)
+
+
+async def test_the_min_score_remedy_names_the_real_default(service, resume_text):
+    """The remedy said 0.25 long after the default became 0.15.
+
+    A remedy that names the wrong number is worse than none: it tells the user
+    to set a threshold that silently changes their results.
+    """
+    resume = await service.parse_resume(text=resume_text)
+    with pytest.raises(ValidationFailed) as excinfo:
+        await service.match_jobs(resume_id=resume.id, min_score=7.0)
+
+    assert str(DEFAULT_MIN_SCORE) in str(excinfo.value)
+    assert inspect.signature(service.match_jobs).parameters["min_score"].default == (
+        DEFAULT_MIN_SCORE
+    )
 
 
 async def test_cover_letter_falls_back_to_a_brief_without_ollama(service, resume_text):

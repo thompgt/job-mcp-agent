@@ -38,6 +38,7 @@ from pydantic import Field
 from careercraft import __version__
 from careercraft.adapters.files import resolve_allowed
 from careercraft.capabilities import collect
+from careercraft.core.matching import DEFAULT_MIN_SCORE
 from careercraft.errors import CareerCraftError
 from careercraft.logging import get_logger
 from careercraft.models import (
@@ -255,7 +256,7 @@ def build_server(
         ] = "",
         location: str = "",
         top_k: Annotated[int, Field(ge=1, le=50)] = 10,
-        min_score: Annotated[float, Field(ge=0.0, le=1.0)] = 0.15,
+        min_score: Annotated[float, Field(ge=0.0, le=1.0)] = DEFAULT_MIN_SCORE,
         strategy: Annotated[
             Strategy, Field(description="'auto' picks embeddings when installed, else keyword.")
         ] = "auto",
