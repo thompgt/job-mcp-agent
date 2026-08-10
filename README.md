@@ -119,7 +119,9 @@ the prose.
   text is fenced and labelled as data before it reaches any model.
 - Docker + Compose (loopback-only published ports), pre-commit, and a GitHub
   Actions matrix across 3 OSes × Python 3.10/3.13 — including a base-install-only
-  job, since "the extras are optional" is a claim that has to be tested.
+  job, since "the extras are optional" is a claim that has to be tested, and a
+  `docker` job that builds the image and curls its healthcheck, since "the
+  Dockerfile works" is another one.
 
 ---
 

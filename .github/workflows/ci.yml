@@ -81,6 +81,33 @@ jobs:
           name: dist
           path: dist/
 
+  # Nothing built this image, so a Dockerfile that could not possibly work sat
+  # in the tree unnoticed. Build it and prove the entrypoint actually starts.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: careercraft:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: The installed extras are really there
+        run: docker run --rm careercraft:ci careercraft doctor
+      - name: The API answers its own healthcheck
+        run: |
+          docker run -d --name cc -p 8000:8000 careercraft:ci
+          for _ in $(seq 30); do
+            if curl -fsS http://127.0.0.1:8000/api/health >/dev/null; then
+              echo "healthy"; docker rm -f cc; exit 0
+            fi
+            sleep 2
+          done
+          echo "never became healthy"; docker logs cc; docker rm -f cc; exit 1
+
   web:
     runs-on: ubuntu-latest
     defaults:
