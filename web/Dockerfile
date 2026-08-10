@@ -17,6 +17,11 @@ COPY . .
 # localhost rather than the compose service name.
 ARG NEXT_PUBLIC_API_URL=http://localhost:8000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
+# The bearer token, if the API demands one. Inlined into the browser bundle
+# like any NEXT_PUBLIC_* value, so it is not a secret kept from the UI's users.
+ARG NEXT_PUBLIC_API_TOKEN=
+ENV NEXT_PUBLIC_API_TOKEN=$NEXT_PUBLIC_API_TOKEN
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build

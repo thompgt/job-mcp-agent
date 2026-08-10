@@ -403,6 +403,12 @@ npm run dev            # http://localhost:3000
 
 Point it elsewhere with `NEXT_PUBLIC_API_URL` (default `http://127.0.0.1:8000`).
 Next.js inlines `NEXT_PUBLIC_*` at build time, so it is a build arg too.
+
+If the API runs with `CAREERCRAFT_AUTH_TOKEN` set, give the UI the same value
+as `NEXT_PUBLIC_API_TOKEN` — it sends it as `Authorization: Bearer …` on every
+request, and every route past `/api/health` requires it. Being a
+`NEXT_PUBLIC_*` value it lands in the browser bundle, so treat it as a token
+for reaching *your own* API, not as a secret hidden from the UI's users.
 `npm run generate:api` regenerates `lib/schema.d.ts` from `openapi.json`;
 `python scripts/dump_openapi.py` regenerates that file from FastAPI.
 

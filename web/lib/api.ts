@@ -30,6 +30,21 @@ export type Strategy = NonNullable<Schemas["MatchRequest"]["strategy"]>;
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
 /**
+ * The bearer token, when the API is configured to demand one.
+ *
+ * Every route past `/health` carries `AuthDep`, so a UI that sends no
+ * `Authorization` header can only ever talk to an API running without
+ * `CAREERCRAFT_AUTH_TOKEN` — that is, one bound to loopback. Setting this
+ * makes the UI usable against a token-protected API too.
+ *
+ * `NEXT_PUBLIC_*` is inlined into the browser bundle, so this token is
+ * readable by anyone who can load the page. That is inherent to a static
+ * front end calling the API directly: use it to reach your own API, not as a
+ * secret kept from the people using the UI.
+ */
+const TOKEN = process.env.NEXT_PUBLIC_API_TOKEN ?? "";
+
+/**
  * An error the API described, rather than one the network produced.
  *
  * The API answers failures with `{code, message, remedy}` — the remedy names
@@ -77,6 +92,10 @@ async function toError(response: Response): Promise<ApiError> {
   } catch {
     // A non-JSON body means the server is not the one we think it is.
   }
+  if (response.status === 401) {
+    code = "unauthorized";
+    remedy ??= "Set NEXT_PUBLIC_API_TOKEN to the API's CAREERCRAFT_AUTH_TOKEN and rebuild.";
+  }
   return new ApiError(response.status, code, message, remedy);
 }
 
@@ -87,6 +106,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init,
       headers: {
         ...(init?.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+        ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}),
         ...init?.headers,
       },
     });
