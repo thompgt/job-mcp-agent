@@ -72,10 +72,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/tpequegnot/careercraft-mcp"
-Repository = "https://github.com/tpequegnot/careercraft-mcp"
-Issues = "https://github.com/tpequegnot/careercraft-mcp/issues"
-Changelog = "https://github.com/tpequegnot/careercraft-mcp/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/thompgt/job-mcp-agent"
+Repository = "https://github.com/thompgt/job-mcp-agent"
+Issues = "https://github.com/thompgt/job-mcp-agent/issues"
+Changelog = "https://github.com/thompgt/job-mcp-agent/blob/main/CHANGELOG.md"
 
 [project.scripts]
 careercraft-mcp = "careercraft.cli:main"

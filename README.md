@@ -3,7 +3,7 @@
 An MCP server that turns a resume into targeted job applications — parsing,
 matching and cover letters, running entirely on your machine.
 
-[![CI](https://github.com/tpequegnot/careercraft-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/tpequegnot/careercraft-mcp/actions/workflows/ci.yml)
+[![CI](https://github.com/thompgt/job-mcp-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/thompgt/job-mcp-agent/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/careercraft-mcp.svg)](https://pypi.org/project/careercraft-mcp/)
 [![Python](https://img.shields.io/pypi/pyversions/careercraft-mcp.svg)](https://pypi.org/project/careercraft-mcp/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -476,8 +476,8 @@ servers. Copy `.env.example` to `.env` for local development, or use the host's
 ### Development
 
 ```bash
-git clone https://github.com/tpequegnot/careercraft-mcp
-cd careercraft-mcp
+git clone https://github.com/thompgt/job-mcp-agent
+cd job-mcp-agent
 uv venv && uv pip install -e '.[all,dev]'
 pre-commit install
 

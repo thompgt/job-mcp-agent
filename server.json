@@ -1,9 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
-  "name": "io.github.tpequegnot/careercraft",
+  "name": "io.github.thompgt/job-mcp-agent",
   "description": "Parse a resume, rank job postings against it with explained scores, and draft grounded cover letters — entirely on your machine.",
   "repository": {
-    "url": "https://github.com/tpequegnot/careercraft-mcp",
+    "url": "https://github.com/thompgt/job-mcp-agent",
     "source": "github"
   },
   "version": "0.1.0",

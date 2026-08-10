@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Please report security issues through GitHub's private
-[security advisory](https://github.com/tpequegnot/careercraft-mcp/security/advisories/new)
+[security advisory](https://github.com/thompgt/job-mcp-agent/security/advisories/new)
 form rather than a public issue. Expect an acknowledgement within a week.
 
 ## Threat model

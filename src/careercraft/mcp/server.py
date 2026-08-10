@@ -130,7 +130,7 @@ def build_server(
         name="careercraft",
         version=__version__,
         instructions=INSTRUCTIONS,
-        website_url="https://github.com/thomaspequegnot/careercraft-mcp",
+        website_url="https://github.com/thompgt/job-mcp-agent",
         lifespan=lifespan,
     )
 
