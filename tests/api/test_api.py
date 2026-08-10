@@ -17,7 +17,19 @@ async def test_health_reports_more_than_ok(client):
     assert body["status"] == "ok"
     assert body["version"]
     assert body["llm_available"] is False
-    assert "jobs" in body["stats"]
+
+
+async def test_health_says_nothing_about_the_user(client, resume_text):
+    """It is the only route without AuthDep, so it answers strangers.
+
+    It used to include the store's row counts, which told anyone who could
+    reach the port how many resumes and letters the operator had stored.
+    """
+    await client.post("/api/resumes/parse", json={"text": resume_text})
+
+    body = (await client.get("/api/health")).json()
+    assert "stats" not in body
+    assert set(body) == {"status", "version", "llm_available"}
 
 
 async def test_capabilities_names_the_fix_for_anything_missing(client):

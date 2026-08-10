@@ -13,10 +13,13 @@ export interface paths {
         };
         /**
          * Health
-         * @description Liveness plus enough detail to be worth curling.
+         * @description Liveness, and enough about the install to be worth curling.
          *
          *     A health check that only says "ok" tells you nothing you did not already
-         *     know from the connection succeeding.
+         *     know from the connection succeeding — but this is the one route without
+         *     AuthDep, so what it says has to be safe to say to a stranger. It reports
+         *     the install: version, and whether a model is reachable. It no longer
+         *     reports the store's row counts, which described the user.
          */
         get: operations["health_api_health_get"];
         put?: never;
@@ -398,7 +401,17 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
-        /** HealthResponse */
+        /**
+         * HealthResponse
+         * @description Liveness. Deliberately free of anything about the user.
+         *
+         *     This used to carry ``stats`` — the row counts of every table — and it is
+         *     the one route with no ``AuthDep``, because a health check that requires a
+         *     credential is not much of a health check. That combination told any
+         *     unauthenticated caller how many resumes and letters the operator had
+         *     stored. Version and model availability describe the *install*, which is
+         *     already public at ``/capabilities``; row counts describe the *user*.
+         */
         HealthResponse: {
             /** Status */
             status: string;
@@ -406,10 +419,6 @@ export interface components {
             version: string;
             /** Llm Available */
             llm_available: boolean;
-            /** Stats */
-            stats: {
-                [key: string]: number;
-            };
         };
         /**
          * Job

@@ -12,6 +12,10 @@ repos:
       # A resume or a .env in a commit is not recoverable once pushed.
       - id: detect-private-key
       - id: check-case-conflict
+      # Three files were committed from a Windows editor with a UTF-8 BOM,
+      # which ruff format rejects and which some tools read as part of the
+      # first token.
+      - id: fix-byte-order-marker
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.9.4

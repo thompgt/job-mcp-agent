@@ -1,4 +1,4 @@
-﻿"""The MCP server.
+"""The MCP server.
 
 This is the primary interface to CareerCraft: seven tools, six resources and
 three prompts over :class:`~careercraft.service.CareerCraftService`.

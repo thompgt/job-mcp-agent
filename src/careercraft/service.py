@@ -1,4 +1,4 @@
-﻿"""The application service.
+"""The application service.
 
 One object that owns the store, the job provider and the language model, and
 implements every operation the product offers. Both the MCP server and the

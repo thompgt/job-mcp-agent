@@ -1,4 +1,4 @@
-﻿"""Request bodies for the HTTP API.
+"""Request bodies for the HTTP API.
 
 Responses reuse the domain models from :mod:`careercraft.models` verbatim, so
 the OpenAPI schema the frontend generates its client from and the MCP tool
@@ -84,7 +84,16 @@ class ErrorResponse(Body):
 
 
 class HealthResponse(Body):
+    """Liveness. Deliberately free of anything about the user.
+
+    This used to carry ``stats`` — the row counts of every table — and it is
+    the one route with no ``AuthDep``, because a health check that requires a
+    credential is not much of a health check. That combination told any
+    unauthenticated caller how many resumes and letters the operator had
+    stored. Version and model availability describe the *install*, which is
+    already public at ``/capabilities``; row counts describe the *user*.
+    """
+
     status: str
     version: str
     llm_available: bool
-    stats: dict[str, int]
