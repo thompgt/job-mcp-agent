@@ -17,6 +17,7 @@ import httpx
 from careercraft.core.jobs.base import JobProvider, JobQuery
 from careercraft.errors import ProviderError
 from careercraft.models import Job
+from careercraft.retry import with_retry
 
 _TAG_RE = re.compile(r"<[^>]+>")
 #: Jobicy rejects counts outside this range with a 400.
@@ -102,9 +103,16 @@ class JobicyProvider(JobProvider):
         if query.location:
             params["geo"] = query.location.lower().replace(" ", "-")
 
-        try:
+        async def fetch() -> httpx.Response:
             response = await self._get_client().get(self._base_url, params=params)
             response.raise_for_status()
+            return response
+
+        try:
+            # A dropped connection or a 503 from a free job board is common
+            # enough that one attempt made "no jobs matched" and "the board
+            # blinked" look identical to the caller.
+            response = await with_retry(fetch, what="jobicy.search")
             payload = response.json()
         except httpx.HTTPStatusError as exc:
             raise ProviderError(

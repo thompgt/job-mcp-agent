@@ -17,6 +17,7 @@ import httpx
 from careercraft.errors import ProviderError
 from careercraft.llm import ChatMessage
 from careercraft.logging import get_logger
+from careercraft.retry import DEFAULT_ATTEMPTS, with_retry
 
 log = get_logger(__name__)
 
@@ -60,15 +61,34 @@ class OllamaProvider:
             await self._owned.aclose()
         self._owned = None
 
-    async def _request(self, method: str, path: str, timeout: float, **kwargs: Any) -> Any:
-        response = await self._get_client().request(
-            method, f"{self.base_url}{path}", timeout=timeout, **kwargs
-        )
-        response.raise_for_status()
-        return response
+    async def _request(
+        self, method: str, path: str, timeout: float, *, retries: int = 1, **kwargs: Any
+    ) -> Any:
+        async def send() -> httpx.Response:
+            response = await self._get_client().request(
+                method, f"{self.base_url}{path}", timeout=timeout, **kwargs
+            )
+            response.raise_for_status()
+            return response
+
+        # ``retries=1`` means one attempt: the probes below are meant to answer
+        # "is the daemon up right now" quickly, and backing off would turn a
+        # two-second capability check into a slow one.
+        return await with_retry(send, what=f"ollama {method} {path}", attempts=retries)
 
     async def is_available(self) -> bool:
-        """True when the daemon answers. Never raises."""
+        """True when a letter can actually be generated. Never raises.
+
+        A reachable daemon is not enough. A fresh Ollama install answers
+        ``/api/tags`` perfectly well with an empty model list, so probing only
+        for reachability made ``careercraft doctor`` report letter writing as
+        available and then fail on the first request with a 404 — which is the
+        opposite of what the capability report is for.
+        """
+        return self.model in set(await self.list_models())
+
+    async def daemon_reachable(self) -> bool:
+        """Whether the daemon answers at all, regardless of models."""
         try:
             await self._request("GET", "/api/tags", _PROBE_TIMEOUT)
         except Exception:
@@ -112,7 +132,12 @@ class OllamaProvider:
 
         log.info("ollama.complete", model=body["model"], messages=len(messages))
         try:
-            response = await self._request("POST", "/api/chat", self.timeout, json=body)
+            # Generation is the expensive call and the one a user waits on,
+            # so a dropped connection or a 503 is worth another go. A 404
+            # (no such model) is not transient and is not retried.
+            response = await self._request(
+                "POST", "/api/chat", self.timeout, retries=DEFAULT_ATTEMPTS, json=body
+            )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
                 raise ProviderError(
@@ -148,6 +173,9 @@ class OllamaProvider:
         if max_tokens is not None:
             body["options"]["num_predict"] = max_tokens
 
+        # Deliberately not retried: by the time a stream fails it has usually
+        # yielded tokens the caller has already displayed, and starting over
+        # would repeat them. ``complete`` is the retried path.
         try:
             async with self._get_client().stream(
                 "POST", f"{self.base_url}/api/chat", json=body, timeout=self.timeout

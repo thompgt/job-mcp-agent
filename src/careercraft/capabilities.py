@@ -25,11 +25,18 @@ def _spacy_present() -> bool:
         return False
 
 
-def collect(*, transport: str = "stdio", ollama_reachable: bool | None = None) -> Capabilities:
+def collect(
+    *,
+    transport: str = "stdio",
+    ollama_reachable: bool | None = None,
+    ollama_hint: str | None = None,
+) -> Capabilities:
     """Build the capability report.
 
     ``ollama_reachable`` is passed in rather than probed, because probing is a
     network call and this is called from resource reads that should stay fast.
+    ``ollama_hint`` carries *why* it is unavailable, since "install Ollama" and
+    "pull the model" are different problems.
     """
     backends = extraction_backends()
     entries = [
@@ -85,7 +92,7 @@ def collect(*, transport: str = "stdio", ollama_reachable: bool | None = None) -
             enable_with=(
                 None
                 if ollama_reachable
-                else "Install Ollama from https://ollama.com, then `ollama serve`"
+                else (ollama_hint or "Install Ollama from https://ollama.com, then `ollama serve`")
             ),
         ),
         Capability(

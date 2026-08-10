@@ -17,7 +17,19 @@ async def test_health_reports_more_than_ok(client):
     assert body["status"] == "ok"
     assert body["version"]
     assert body["llm_available"] is False
-    assert "jobs" in body["stats"]
+
+
+async def test_health_says_nothing_about_the_user(client, resume_text):
+    """It is the only route without AuthDep, so it answers strangers.
+
+    It used to include the store's row counts, which told anyone who could
+    reach the port how many resumes and letters the operator had stored.
+    """
+    await client.post("/api/resumes/parse", json={"text": resume_text})
+
+    body = (await client.get("/api/health")).json()
+    assert "stats" not in body
+    assert set(body) == {"status", "version", "llm_available"}
 
 
 async def test_capabilities_names_the_fix_for_anything_missing(client):
@@ -220,6 +232,19 @@ async def test_a_configured_token_is_required(token_client):
         ).status_code == 401
         ok = await c.get("/api/resumes", headers={"Authorization": "Bearer s3cret"})
         assert ok.status_code == 200
+
+
+async def test_a_malformed_token_header_is_rejected_not_crashed(token_client):
+    """Near-misses and wrong schemes 401 rather than raising out of the check.
+
+    compare_digest is fussy — it raises TypeError on a str with non-ASCII and
+    is not length-agnostic in the obvious way — so the prefix, empty and
+    wrong-scheme cases are worth pinning.
+    """
+    async with token_client as c:
+        for value in ("", "s3cret", "Basic s3cret", "Bearer s3cre", "Bearer s3cretX"):
+            response = await c.get("/api/resumes", headers={"Authorization": value})
+            assert response.status_code == 401, value
 
 
 async def test_health_stays_open_so_probes_work(token_client):

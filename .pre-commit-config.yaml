@@ -12,9 +12,15 @@ repos:
       # A resume or a .env in a commit is not recoverable once pushed.
       - id: detect-private-key
       - id: check-case-conflict
+      # Three files were committed from a Windows editor with a UTF-8 BOM,
+      # which ruff format rejects and which some tools read as part of the
+      # first token.
+      - id: fix-byte-order-marker
 
+  # Kept in step with the ruff pinned in pyproject's [dev] extra: a hook that
+  # formats differently from the version CI runs is worse than no hook.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.9.4
+    rev: v0.16.2
     hooks:
       - id: ruff
         args: [--fix]
@@ -23,7 +29,7 @@ repos:
         files: ^(src|tests)/
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.14.1
+    rev: v2.3.0
     hooks:
       - id: mypy
         files: ^src/careercraft/

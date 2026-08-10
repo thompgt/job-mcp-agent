@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request, status
@@ -34,8 +35,14 @@ async def require_token(
     if not settings.auth_token:
         return
 
-    expected = f"Bearer {settings.auth_token}"
-    if authorization != expected:
+    # compare_digest, not ==: this is the only auth boundary that exists once
+    # the bind is not loopback, and `==` on str short-circuits at the first
+    # differing byte, which leaks the token prefix to a timing oracle.
+    # Compared as bytes, because compare_digest raises TypeError on a str
+    # containing non-ASCII and a header is attacker-controlled.
+    expected = f"Bearer {settings.auth_token}".encode()
+    supplied = (authorization or "").encode()
+    if not secrets.compare_digest(supplied, expected):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing or invalid bearer token.",

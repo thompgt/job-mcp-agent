@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -244,8 +244,22 @@ class SqliteStore:
 
     def _delete_resume_sync(self, resume_id: str) -> bool:
         with self._connect() as conn:
+            # The letters go with it. Deleting only the resume row left every
+            # letter generated from it pointing at a resume_id that resolves to
+            # nothing — and those letters quote the resume, so "delete my
+            # resume" would have left the contents of it in the store. The
+            # cascade is written out rather than declared as a foreign key
+            # because letters.resume_id was created without one and adding it
+            # to an existing table means rebuilding it.
             cursor = conn.execute("DELETE FROM resumes WHERE id = ?", (resume_id,))
-        return cursor.rowcount > 0
+            deleted = cursor.rowcount > 0
+            if deleted:
+                letters = conn.execute(
+                    "DELETE FROM letters WHERE resume_id = ?", (resume_id,)
+                ).rowcount
+                if letters:
+                    log.info("storage.letters_deleted", resume_id=resume_id, count=letters)
+        return deleted
 
     async def delete_resume(self, resume_id: str) -> bool:
         return bool(await self._run(self._delete_resume_sync, resume_id))
@@ -352,6 +366,60 @@ class SqliteStore:
         await self._run(self._cache_put_sync, key, [job.id for job in jobs])
 
     # ------------------------------------------------------------- admin
+
+    def _prune_sync(self, max_age_days: int) -> dict[str, int]:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+        with self._connect() as conn:
+            # Cache entries first: they hold the job ids that keep postings
+            # alive, and an expired entry is unreadable anyway.
+            cache = conn.execute(
+                "DELETE FROM search_cache WHERE created_at < ?", (cutoff,)
+            ).rowcount
+            # A posting goes only if nothing points at it. Saved jobs are the
+            # user's shortlist and letters quote the posting they were written
+            # for; deleting either's job would turn a shortlist entry or a
+            # stored letter into a dangling reference. Live cache entries count
+            # too — a cached search whose postings were pruned would answer
+            # with fewer results than it promised.
+            #
+            # The cache ids are unpacked in Python rather than with json_each,
+            # which is a JSON1 extension this package cannot assume is compiled
+            # into every user's sqlite3.
+            live_ids: set[str] = set()
+            for row in conn.execute("SELECT job_ids FROM search_cache").fetchall():
+                live_ids.update(json.loads(row["job_ids"]))
+            # ``NOT IN (NULL)`` is never true in SQL — it evaluates to NULL and
+            # the row is kept — so an empty set has to drop the clause rather
+            # than emit a placeholder for nothing.
+            ids = sorted(live_ids)
+            clause = f" AND id NOT IN ({','.join('?' * len(ids))})" if ids else ""
+            jobs = conn.execute(
+                # The only interpolation is a run of '?' placeholders.
+                "DELETE FROM jobs WHERE fetched_at < ? "  # noqa: S608
+                "AND id NOT IN (SELECT job_id FROM saved_jobs) "
+                "AND id NOT IN (SELECT job_id FROM letters)" + clause,
+                (cutoff, *ids),
+            ).rowcount
+            # Letters whose resume was deleted before the cascade above existed.
+            orphans = conn.execute(
+                "DELETE FROM letters WHERE resume_id IS NOT NULL "
+                "AND resume_id NOT IN (SELECT id FROM resumes)"
+            ).rowcount
+        result = {"jobs": jobs, "search_cache": cache, "orphaned_letters": orphans}
+        if any(result.values()):
+            log.info("storage.pruned", **result)
+        return result
+
+    async def prune(self, max_age_days: int = 30) -> dict[str, int]:
+        """Drop stale postings and expired cache rows, and sweep up orphans.
+
+        Nothing was ever deleted from this store. Every search wrote up to
+        fifty postings, and a user running the server daily accumulated them
+        forever — a file that only grows, holding job descriptions they saw
+        once months ago. Resumes and letters are the user's own work and are
+        never pruned; only fetched board data and its cache are.
+        """
+        return dict(await self._run(self._prune_sync, max_age_days))
 
     def _stats_sync(self) -> dict[str, int]:
         with self._connect() as conn:

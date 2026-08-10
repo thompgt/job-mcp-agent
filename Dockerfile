@@ -30,7 +30,13 @@ COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /usr/local/bin/uv
 RUN useradd --create-home --uid 10001 careercraft
 
 COPY --from=build /dist/*.whl /tmp/
-RUN uv pip install --system --no-cache /tmp/*.whl'[pdf,ocr,api]' \
+# The extras have to be appended *after* the glob expands. Writing
+# `/tmp/*.whl'[pdf,ocr,api]'` looks right and never works: the quoted bracket
+# is literal, so the whole word matches no file, and sh passes the unexpanded
+# pattern straight to uv, which fails on a path that does not exist.
+RUN set -eu \
+ && whl="$(ls /tmp/*.whl)" \
+ && uv pip install --system --no-cache "${whl}[pdf,ocr,api]" \
  && rm /tmp/*.whl
 
 # 0.0.0.0 is required for published ports to reach the process at all. The

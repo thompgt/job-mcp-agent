@@ -1,0 +1,18 @@
+# Normalise to LF in the repository. Without this, a checkout on Windows
+# commits CRLF and `ruff format --check` fails in CI on Linux for reasons that
+# have nothing to do with the code.
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+*.png binary
+*.jpg binary
+*.pdf binary
+*.docx binary
+*.ico binary
+
+# Generated — keep it out of diffs and out of language statistics.
+web/lib/schema.d.ts linguist-generated=true
+web/package-lock.json linguist-generated=true
+web/openapi.json linguist-generated=true

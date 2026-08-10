@@ -79,9 +79,7 @@ def test_a_public_bind_with_a_token_is_allowed():
 
 def test_the_container_opt_out_permits_an_unauthenticated_bind():
     """A container must bind 0.0.0.0 to receive published traffic at all."""
-    Settings(
-        transport="http", host="0.0.0.0", allow_unauthenticated_bind=True
-    ).check_bind_safety()
+    Settings(transport="http", host="0.0.0.0", allow_unauthenticated_bind=True).check_bind_safety()
 
 
 def test_the_opt_out_is_off_by_default():

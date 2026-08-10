@@ -24,13 +24,17 @@ jobs:
         with:
           enable-cache: true
       - run: uv python install 3.12
-      - run: uv pip install --system -e '.[api,dev]'
+      # From the lockfile, not from a fresh resolve. --locked also fails if
+      # uv.lock has drifted from pyproject.toml, which is the only thing that
+      # keeps a checked-in lock honest.
+      - name: Install from uv.lock
+        run: uv sync --locked --extra api --extra dev
       - name: ruff check
-        run: ruff check src tests
+        run: uv run ruff check src tests
       - name: ruff format
-        run: ruff format --check src tests
+        run: uv run ruff format --check src tests
       - name: mypy
-        run: mypy
+        run: uv run mypy
 
   test:
     # The base install has to work on its own — that is the whole premise of
@@ -54,6 +58,10 @@ jobs:
         with:
           enable-cache: true
       - run: uv python install ${{ matrix.python }}
+      # Resolved fresh rather than from the lock, deliberately: the published
+      # package declares lower bounds, and this matrix is where we find out
+      # whether the current releases of those dependencies still work. The
+      # lock covers the lint job, which is the one that has to be reproducible.
       - run: uv pip install --system -e '.[${{ matrix.extras }}]'
       - run: pytest --cov --cov-report=term-missing --cov-report=xml
       - name: Verify the console script starts
@@ -80,6 +88,33 @@ jobs:
         with:
           name: dist
           path: dist/
+
+  # Nothing built this image, so a Dockerfile that could not possibly work sat
+  # in the tree unnoticed. Build it and prove the entrypoint actually starts.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: careercraft:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: The installed extras are really there
+        run: docker run --rm careercraft:ci careercraft doctor
+      - name: The API answers its own healthcheck
+        run: |
+          docker run -d --name cc -p 8000:8000 careercraft:ci
+          for _ in $(seq 30); do
+            if curl -fsS http://127.0.0.1:8000/api/health >/dev/null; then
+              echo "healthy"; docker rm -f cc; exit 0
+            fi
+            sleep 2
+          done
+          echo "never became healthy"; docker logs cc; docker rm -f cc; exit 1
 
   web:
     runs-on: ubuntu-latest

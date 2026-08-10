@@ -1,4 +1,4 @@
-﻿"""The application service.
+"""The application service.
 
 One object that owns the store, the job provider and the language model, and
 implements every operation the product offers. Both the MCP server and the
@@ -22,7 +22,7 @@ from careercraft.adapters.llm import NullProvider, OllamaProvider
 from careercraft.adapters.storage import SqliteStore
 from careercraft.core.jobs import JobicyProvider, JobProvider, JobQuery, MockProvider
 from careercraft.core.letters import generate_letter
-from careercraft.core.matching import rank_jobs
+from careercraft.core.matching import DEFAULT_MIN_SCORE, rank_jobs
 from careercraft.core.resume import extract_text, parse_resume_text
 from careercraft.core.resume.extract import LayoutLine
 from careercraft.core.resume.skills import load_extra_terms
@@ -84,6 +84,18 @@ class CareerCraftService:
     async def startup(self) -> None:
         self.settings.ensure_dirs()
         await self.store.initialize()
+
+        # Housekeeping at startup rather than on a timer: this process is
+        # usually a short-lived MCP server spawned by a host, so there is no
+        # long-running loop to hang a scheduler off, and startup is the one
+        # moment nothing is waiting on a tool call. A failure here must never
+        # stop the server from serving — the store working is what matters,
+        # not the store being tidy.
+        if self.settings.retention_days > 0:
+            try:
+                await self.store.prune(self.settings.retention_days)
+            except Exception:
+                log.warning("startup.prune_failed", exc_info=True)
 
     async def shutdown(self) -> None:
         """Release the providers' connection pools.
@@ -297,7 +309,7 @@ class CareerCraftService:
         query: str = "",
         location: str = "",
         top_k: int = 10,
-        min_score: float = 0.15,
+        min_score: float = DEFAULT_MIN_SCORE,
         strategy: Strategy = "auto",
         filter_seniority: bool = True,
         pool_size: int = 50,
@@ -307,7 +319,8 @@ class CareerCraftService:
         """Rank postings against a resume, fetching a pool if needed."""
         if not 0.0 <= min_score <= 1.0:
             raise ValidationFailed(
-                "min_score must be between 0 and 1.", remedy="The default is 0.25."
+                "min_score must be between 0 and 1.",
+                remedy=f"The default is {DEFAULT_MIN_SCORE}.",
             )
 
         target = resume or await self.get_resume(resume_id)
@@ -397,6 +410,22 @@ class CareerCraftService:
 
     async def llm_available(self) -> bool:
         return await self.llm.is_available()
+
+    async def llm_status(self) -> tuple[bool, str | None]:
+        """``(ready, hint)`` — and when not ready, *why* not.
+
+        "Install Ollama" and "pull the model you configured" are different
+        problems with different fixes, and a capability report that cannot
+        tell them apart sends people to reinstall software they already have.
+        """
+        if await self.llm.is_available():
+            return True, None
+
+        reachable = getattr(self.llm, "daemon_reachable", None)
+        if reachable is not None and await reachable():
+            model = getattr(self.llm, "model", self.settings.ollama_model)
+            return False, f"Ollama is running but has no model {model!r}. Run `ollama pull {model}`"
+        return False, "Install Ollama from https://ollama.com, then `ollama serve`"
 
     async def stats(self) -> dict[str, int]:
         return await self.store.stats()

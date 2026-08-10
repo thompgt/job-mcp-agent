@@ -92,3 +92,29 @@ def test_a_refused_bind_is_reported_not_traced(capsys, monkeypatch):
     get_settings.cache_clear()
     assert main(["serve", "--transport", "http", "--host", "0.0.0.0"]) == 2
     assert "auth token" in capsys.readouterr().err.lower()
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [(["api"], False), (["api", "--reload"], True)],
+)
+def test_reload_reaches_uvicorn(monkeypatch, argv, expected):
+    """`--reload` was parsed and then dropped on the floor.
+
+    The flag was advertised in `--help` and accepted without complaint, and
+    nothing ever restarted — so a developer editing a route saw stale
+    behaviour and no reason for it.
+    """
+    captured: dict[str, object] = {}
+
+    def fake_run(app: str, **kwargs: object) -> None:
+        captured["app"] = app
+        captured.update(kwargs)
+
+    uvicorn = pytest.importorskip("uvicorn")
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+
+    assert main(argv) == 0
+    # An import string, not an app object: the reloader re-imports per change.
+    assert captured["app"] == "careercraft.api.app:app"
+    assert captured["reload"] is expected

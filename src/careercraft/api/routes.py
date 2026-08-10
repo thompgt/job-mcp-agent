@@ -44,23 +44,26 @@ router = APIRouter()
 
 @router.get("/health", response_model=HealthResponse, tags=["meta"])
 async def health(service: ServiceDep) -> HealthResponse:
-    """Liveness plus enough detail to be worth curling.
+    """Liveness, and enough about the install to be worth curling.
 
     A health check that only says "ok" tells you nothing you did not already
-    know from the connection succeeding.
+    know from the connection succeeding — but this is the one route without
+    AuthDep, so what it says has to be safe to say to a stranger. It reports
+    the install: version, and whether a model is reachable. It no longer
+    reports the store's row counts, which described the user.
     """
     return HealthResponse(
         status="ok",
         version=__version__,
         llm_available=await service.llm_available(),
-        stats=await service.stats(),
     )
 
 
 @router.get("/capabilities", response_model=Capabilities, tags=["meta"])
 async def capabilities(service: ServiceDep, settings: SettingsDep) -> Capabilities:
     """Which optional features this install has, and how to enable the rest."""
-    return collect(transport="http", ollama_reachable=await service.llm_available())
+    ready, hint = await service.llm_status()
+    return collect(transport="http", ollama_reachable=ready, ollama_hint=hint)
 
 
 # ------------------------------------------------------------------ jobs

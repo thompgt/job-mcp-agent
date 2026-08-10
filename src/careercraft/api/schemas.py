@@ -1,4 +1,4 @@
-﻿"""Request bodies for the HTTP API.
+"""Request bodies for the HTTP API.
 
 Responses reuse the domain models from :mod:`careercraft.models` verbatim, so
 the OpenAPI schema the frontend generates its client from and the MCP tool
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from careercraft.core.matching import DEFAULT_MIN_SCORE
 from careercraft.models import CoverLetter, Job, Length, Strategy, Tone
 
 
@@ -36,7 +37,7 @@ class MatchRequest(Body):
     query: str = ""
     location: str = ""
     top_k: int = Field(default=10, ge=1, le=50)
-    min_score: float = Field(default=0.15, ge=0.0, le=1.0)
+    min_score: float = Field(default=DEFAULT_MIN_SCORE, ge=0.0, le=1.0)
     strategy: Strategy = "auto"
     filter_seniority: bool = True
 
@@ -83,7 +84,16 @@ class ErrorResponse(Body):
 
 
 class HealthResponse(Body):
+    """Liveness. Deliberately free of anything about the user.
+
+    This used to carry ``stats`` — the row counts of every table — and it is
+    the one route with no ``AuthDep``, because a health check that requires a
+    credential is not much of a health check. That combination told any
+    unauthenticated caller how many resumes and letters the operator had
+    stored. Version and model availability describe the *install*, which is
+    already public at ``/capabilities``; row counts describe the *user*.
+    """
+
     status: str
     version: str
     llm_available: bool
-    stats: dict[str, int]

@@ -12,7 +12,7 @@
           "meta"
         ],
         "summary": "Health",
-        "description": "Liveness plus enough detail to be worth curling.\n\nA health check that only says \"ok\" tells you nothing you did not already\nknow from the connection succeeding.",
+        "description": "Liveness, and enough about the install to be worth curling.\n\nA health check that only says \"ok\" tells you nothing you did not already\nknow from the connection succeeding \u2014 but this is the one route without\nAuthDep, so what it says has to be safe to say to a stranger. It reports\nthe install: version, and whether a model is reachable. It no longer\nreports the store's row counts, which described the user.",
         "operationId": "health_api_health_get",
         "responses": {
           "200": {
@@ -1207,13 +1207,6 @@
           "llm_available": {
             "type": "boolean",
             "title": "Llm Available"
-          },
-          "stats": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "type": "object",
-            "title": "Stats"
           }
         },
         "additionalProperties": false,
@@ -1221,10 +1214,10 @@
         "required": [
           "status",
           "version",
-          "llm_available",
-          "stats"
+          "llm_available"
         ],
-        "title": "HealthResponse"
+        "title": "HealthResponse",
+        "description": "Liveness. Deliberately free of anything about the user.\n\nThis used to carry ``stats`` \u2014 the row counts of every table \u2014 and it is\nthe one route with no ``AuthDep``, because a health check that requires a\ncredential is not much of a health check. That combination told any\nunauthenticated caller how many resumes and letters the operator had\nstored. Version and model availability describe the *install*, which is\nalready public at ``/capabilities``; row counts describe the *user*."
       },
       "Job": {
         "properties": {

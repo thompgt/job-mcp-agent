@@ -83,6 +83,15 @@ class Settings(BaseSettings):
     job_fetch_timeout: float = 20.0
     job_cache_ttl_seconds: int = 3600
 
+    retention_days: int = 30
+    """How long a fetched posting stays in the store.
+
+    Nothing was ever deleted: every search wrote up to fifty postings and the
+    file only grew, holding descriptions the user saw once months ago. Pruning
+    runs at startup and touches board data only — resumes, letters and saved
+    jobs are the user's own and are kept regardless of age. Set to 0 to keep
+    everything."""
+
     # -- transport ---------------------------------------------------------
     transport: Literal["stdio", "http"] = "stdio"
     host: str = "127.0.0.1"
