@@ -117,6 +117,10 @@ the prose.
   containment checks, `path=` rejected outright over HTTP, and a startup guard
   that *refuses* a non-loopback bind without an auth token. Scraped posting
   text is fenced and labelled as data before it reaches any model.
+- A checked-in `uv.lock` that CI's lint job installs from with `--locked`, so
+  the linting toolchain is reproducible and lock drift is a failed check;
+  the test matrix still resolves fresh, because that is what proves the
+  published package's lower bounds still hold.
 - Docker + Compose (loopback-only published ports), pre-commit, and a GitHub
   Actions matrix across 3 OSes × Python 3.10/3.13 — including a base-install-only
   job, since "the extras are optional" is a claim that has to be tested, and a

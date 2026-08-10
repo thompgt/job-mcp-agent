@@ -59,9 +59,7 @@ def rank_jobs(
         resolved = "keyword"
 
     junior = candidate_is_junior(resume)
-    kept, dropped_by_reason = filter_jobs_explained(
-        resume, jobs, filter_seniority=filter_seniority
-    )
+    kept, dropped_by_reason = filter_jobs_explained(resume, jobs, filter_seniority=filter_seniority)
     dropped = sum(dropped_by_reason.values())
     if dropped:
         breakdown = ", ".join(

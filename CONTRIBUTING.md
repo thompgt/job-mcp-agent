@@ -12,6 +12,20 @@ pre-commit install
 you are not touching the embedding path, `-e '.[pdf,api,dev]'` is enough; the
 tests that need the heavy extras are marked and skip themselves.
 
+For the exact versions CI lints against, install from the lockfile instead:
+
+```bash
+uv sync --locked --extra api --extra dev
+```
+
+`uv.lock` is checked in and `--locked` fails if it has drifted from
+`pyproject.toml` — run `uv lock` and commit the result whenever you change a
+dependency. The lock pins the *development* environment; the package itself
+declares lower bounds, because pinning a published library's dependencies
+pushes resolution conflicts onto everyone who installs it. ruff and mypy are
+the exception and are capped in `[dev]`, since their output gates CI and a
+new release must not turn a check red on a commit that changed nothing.
+
 ## Checks
 
 ```bash

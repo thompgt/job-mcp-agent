@@ -24,13 +24,17 @@ jobs:
         with:
           enable-cache: true
       - run: uv python install 3.12
-      - run: uv pip install --system -e '.[api,dev]'
+      # From the lockfile, not from a fresh resolve. --locked also fails if
+      # uv.lock has drifted from pyproject.toml, which is the only thing that
+      # keeps a checked-in lock honest.
+      - name: Install from uv.lock
+        run: uv sync --locked --extra api --extra dev
       - name: ruff check
-        run: ruff check src tests
+        run: uv run ruff check src tests
       - name: ruff format
-        run: ruff format --check src tests
+        run: uv run ruff format --check src tests
       - name: mypy
-        run: mypy
+        run: uv run mypy
 
   test:
     # The base install has to work on its own — that is the whole premise of
@@ -54,6 +58,10 @@ jobs:
         with:
           enable-cache: true
       - run: uv python install ${{ matrix.python }}
+      # Resolved fresh rather than from the lock, deliberately: the published
+      # package declares lower bounds, and this matrix is where we find out
+      # whether the current releases of those dependencies still work. The
+      # lock covers the lint job, which is the one that has to be reproducible.
       - run: uv pip install --system -e '.[${{ matrix.extras }}]'
       - run: pytest --cov --cov-report=term-missing --cov-report=xml
       - name: Verify the console script starts
